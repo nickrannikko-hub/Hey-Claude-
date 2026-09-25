@@ -7,10 +7,6 @@ Claude desktop app on Windows, built with [AutoHotkey v2](https://www.autohotkey
 > pressing buttons in Claude's app by their names, so a Claude update that renames a button can
 > break them until the scripts are updated.
 
-**On a Mac?** There's an **experimental, untested** Mac version in the [`mac`](mac) folder, built on
-[Hammerspoon](https://www.hammerspoon.org/). See [mac/README.md](mac/README.md). Everything below is
-for Windows.
-
 ## What's included
 
 | Script | What it does |
