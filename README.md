@@ -1,7 +1,7 @@
 # Claude Stream Deck Voice Controls (unofficial)
 
-Stream Deck buttons and a hands-free **"Hey Claude"** wake word for the Claude desktop app on
-Windows, built with [AutoHotkey v2](https://www.autohotkey.com/).
+Stream Deck buttons (or keyboard shortcuts) and a hands-free **"Hey Claude"** wake word for the
+Claude desktop app on Windows, built with [AutoHotkey v2](https://www.autohotkey.com/).
 
 > **Unofficial.** Not made by or affiliated with Anthropic. These scripts work by finding and
 > pressing buttons in Claude's app by their names, so a Claude update that renames a button can
@@ -18,13 +18,16 @@ Windows, built with [AutoHotkey v2](https://www.autohotkey.com/).
 | `claude-voice-on-off.ahk` | **Chat page:** voice mode on/off. **Code page:** dictation on/off (types what you say; you send it). |
 | `claude-voice-on-off-send.ahk` | Like the one above, but dictation **sends itself** when you stop talking, then listens again after Claude replies, for a back-and-forth conversation. |
 | `claude-hey-claude.ahk` | Listens for **"Hey Claude"**. On the Chat page it starts voice mode; on the Code page it takes one dictated message and sends it. Running it again turns it off. |
+| `claude-hotkeys.ahk` | Keyboard shortcuts for all of the above, for use **without a Stream Deck**. |
+| `claude-setup-check.ahk` | Checks everything the scripts need and tells you what's missing. Run it first. |
 
 ## Requirements
 
 - Windows 10 or 11
 - The Claude desktop app, set to **English** (the scripts find buttons by their English names)
 - [AutoHotkey v2](https://www.autohotkey.com/) (the 64-bit version it installs by default)
-- An Elgato Stream Deck, optional: you can also double-click the scripts or bind them to hotkeys
+- An Elgato Stream Deck is **optional**: `claude-hotkeys.ahk` gives you keyboard shortcuts instead,
+  and you can also just double-click the scripts
 - For "Hey Claude": Windows' built-in English (US) speech recognizer. It comes with Windows; the
   listener shows a message if it can't start.
 
@@ -33,26 +36,51 @@ Windows, built with [AutoHotkey v2](https://www.autohotkey.com/).
 1. **Install AutoHotkey v2.**
 2. **Put this folder somewhere permanent**, like `Documents\claude-stream-deck-voice`. Logs and
    settings are saved next to the scripts.
-3. **In Claude, turn off "Hold to record":** on the Code page, click the small arrow next to the
+3. **Run the setup check:** open Claude, then double-click `claude-setup-check.ahk`. It checks
+   AutoHotkey, the Claude app, that Claude is in English, "Hold to record", Windows' speech
+   recognizer and your microphone, and tells you exactly what (if anything) to fix. It doesn't
+   change anything, so run it again whenever you like.
+4. **In Claude, turn off "Hold to record":** on the Code page, click the small arrow next to the
    microphone (Dictation settings) and untick **Hold to record**. The voice buttons need dictation
    to switch on and off with a click. If it's on, they'll show a message saying so.
-4. **Pick your chat:** open `claude-open-chat.ahk` in Notepad and change `CHAT_NAME` to the exact
+5. **Pick your chat:** open `claude-open-chat.ahk` in Notepad and change `CHAT_NAME` to the exact
    title of one of your chats as it shows in Claude's sidebar (capitals matter). For more chats,
    copy the file (for example `claude-open-chat-work.ahk`) and set a different `CHAT_NAME` in each.
    Pinning those chats keeps them in the sidebar where the script can find them.
-5. **Stream Deck:** for each button you want, drag **System → Open** onto a key and choose the
-   `.ahk` file. A layout that works well:
+6. **Buttons or shortcuts,** whichever you have:
+   - **Stream Deck:** for each button you want, drag **System → Open** onto a key and choose the
+     `.ahk` file. A layout that works well:
 
-   | | | | |
-   |---|---|---|---|
-   | Open Claude | Close Claude | Switch page | Hey Claude on/off |
-   | Open chat | Voice on/off | Voice on/off + send | |
+     | | | | |
+     |---|---|---|---|
+     | Open Claude | Close Claude | Switch page | Hey Claude on/off |
+     | Open chat | Voice on/off | Voice on/off + send | |
 
-6. **"Hey Claude":** double-click `claude-hey-claude.ahk` (or put it on a Stream Deck button; it's
-   an on/off toggle). A small AutoHotkey icon appears near the clock while it listens. Right-click it
+   - **No Stream Deck:** double-click `claude-hotkeys.ahk` for keyboard shortcuts (see
+     [Keyboard shortcuts](#keyboard-shortcuts) below).
+7. **"Hey Claude":** double-click `claude-hey-claude.ahk` (or give it a button or shortcut; it's an
+   on/off toggle). A small AutoHotkey icon appears near the clock while it listens. Right-click it
    and choose **Teach it my voice...**, then say "Hey Claude" six times. That tunes it to your voice.
-7. **Optional, start "Hey Claude" with Windows:** press Win+R, type `shell:startup`, and put a
-   shortcut to `claude-hey-claude.ahk` in the folder that opens.
+8. **Optional, start things with Windows:** press Win+R, type `shell:startup`, and put shortcuts to
+   `claude-hey-claude.ahk` and/or `claude-hotkeys.ahk` in the folder that opens.
+
+## Keyboard shortcuts
+
+No Stream Deck? Double-click `claude-hotkeys.ahk` and these work anywhere in Windows (left Ctrl and
+left Alt, so the AltGr key on some keyboards doesn't set them off):
+
+| Shortcut | Does |
+|---|---|
+| Ctrl + Alt + O | Open Claude |
+| Ctrl + Alt + P | Switch between the Chat and Code pages |
+| Ctrl + Alt + C | Open your chat |
+| Ctrl + Alt + V | Voice mode or dictation, on/off |
+| Ctrl + Alt + S | Voice mode or dictation, on/off, sending by itself |
+| Ctrl + Alt + H | "Hey Claude" listening, on/off |
+| Ctrl + Alt + Shift + Q | Quit Claude (Shift added so it's hard to hit by accident) |
+
+Its icon sits near the clock while it runs; right-click it to see the list or exit. To change a
+shortcut, edit the `SHORTCUTS` list at the top of the file.
 
 ## How it behaves
 
@@ -106,15 +134,16 @@ Each script has a Settings block near the top. The most useful ones:
 
 ## Troubleshooting
 
+- **Start with the setup check:** double-click `claude-setup-check.ahk`. It covers most problems
+  below and says what to do about each.
 - **A message popped up:** it names a log file. The log lists what the script saw, including every
   button name Claude showed, which usually points straight at the problem.
-- **"Hold to record" message:** see setup step 3.
+- **"Hold to record" message:** see setup step 4.
 - **"Hey Claude" misses you or starts by mistake:** each attempt is in `claude-hey-claude-log.txt`
   with how sure it was and how loud. Run **Teach it my voice** again, or adjust `MinConfidence` /
   `MinLoudness` in `claude-hey-claude.ini`.
-- **The buttons can't start Claude:** your install may use a different app ID. In PowerShell, run
-  `Get-StartApps | Where-Object Name -like '*Claude*'` and put its AppID into `CLAUDE_APP` in each
-  script, as `shell:AppsFolder\<AppID>`.
+- **The buttons can't start Claude:** your install may use a different app ID. The setup check
+  shows the exact `CLAUDE_APP` value to put at the top of each script.
 - **A script can't find a button:** check Claude is in English. If Claude just updated, a button may
   have been renamed; the log's list of button names shows what it's called now.
 
