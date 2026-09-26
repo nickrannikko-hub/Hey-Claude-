@@ -1,4 +1,4 @@
-; On-screen captions for Claude, version 1.3.0 (see CAPTIONS_VERSION)
+; On-screen captions for Claude, version 1.3.1 (see CAPTIONS_VERSION)
 ;
 ; Shows a small box in the top right corner of your main monitor with what you're saying to Claude
 ; and what Claude is saying back, so you can follow a voice conversation without looking at
@@ -16,7 +16,9 @@
 ; label keeps the reply's time. As a reply grows past
 ; the box, the box keeps up with its newest whole sections (paragraphs, list items), sized to fit
 ; them, so nothing cut off hangs at the top, and your message moves up out of the way. When you
-; say something new, the last exchange slides up and the new one takes its place.
+; say something new, the last exchange slides up and the new one takes its place. If you say it
+; while Claude is still busy with its reply, Claude only gets to it at its next stopping point (on
+; the Code page, between its steps), so until then it waits at the bottom of the box, marked QUEUED.
 ;
 ; Scroll the mouse wheel over the box to go back through the whole reply and the earlier exchanges
 ; since captions were turned on (up to HISTORY_KEEP of them), two whole lines a notch, gliding to
@@ -81,7 +83,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.3.0"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.3.1"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -341,6 +343,23 @@ UpdateCaptions() {
         Critical "Off"
         Kick()
     }
+    ; What Claude said before your newest message can still change after it: a reply you talked
+    ; over goes on until Claude gets to what you said, and your message then lands in the middle of
+    ; it. So the exchange before is kept up to date in the history, and new words there that you
+    ; haven't seen get the arrow at the top of the box.
+    if (now.HasOwnProp("prevYou") && now.prevYou != "" && now.prevClaude != "" && History.Length) {
+        last := History[History.Length]
+        if (last.you == now.prevYou && last.claude != now.prevClaude) {
+            Critical
+            words := ReplyWords(now.prevClaude)
+            if (words != last.words)
+                last.unseen := true, last.words := words
+            last.claude := now.prevClaude
+            LayOutExchange(last), Place()
+            Critical "Off"
+            Kick()
+        }
+    }
     if (micOn != Listening) {
         Listening := micOn
         SetTimer(WatchYourWords, Listening ? YOUR_WORDS_MS : 0)
@@ -424,8 +443,10 @@ ReadEvery(ms) {
 ; An exchange: what you said and Claude's reply, as the box shows them, plus a note while there's
 ; no conversation. parts holds each one laid out: its label, and its words with where each goes.
 ; sawTop notes that you've scrolled up to the start of the reply, so the arrow saying there's more
-; above stays away, and chat that it's from the Chat page, where what you said goes on the right.
-NewExchange() => {note: "", you: "", youStatus: "", dim: false, claude: "", claudeStatus: "", thinking: false, chat: Page = "chat",
+; above stays away, chat that it's from the Chat page, where what you said goes on the right, and
+; queued what you said next while Claude was still busy with this reply (see ShowExchange), and
+; unseen that new words came into its reply after it moved up into the history.
+NewExchange() => {note: "", you: "", youStatus: "", dim: false, claude: "", claudeStatus: "", thinking: false, chat: Page = "chat", queued: "", unseen: false,
     work: "", time: FormatTime(, "h:mm tt"), replyTime: "", newAt: 0, newTime: "", words: "", wordsAt: 0, saidAt: 0, sample: false, restores: false,
     parts: [], stops: [], lineStops: [], anyStops: [], height: 0, y: 0, fadeUntil: 0, sawTop: false}
 
@@ -446,14 +467,20 @@ ShowExchange(now, spreadMs := CHECK_EVERY_MS) {
     } else if (!isSample && Current.claude = "" && now.you != "" && History.Length && now.you == History[History.Length].you) {
         ; The chat still shows the exchange from before what you just said. Usually that's because
         ; your message is on its way there, so the box keeps showing your words. Only if it hasn't
-        ; turned up after SENT_WAIT_MS (you didn't send it) does the box go back to that exchange.
+        ; turned up after SENT_WAIT_MS does the box go back to that exchange.
         wait := SENT_WAIT_MS - (A_TickCount - Current.saidAt)
         if (wait > 0) {
             Current.youStatus := ""   ; not listening any more
             SetTimer(ShowLatestRead, -(wait + 50))
             return
         }
+        said := Current.dim ? "" : Current.you   ; (not "I'm listening…")
         Current := History.Pop()
+        ; If Claude is still busy with that reply, what you said is most likely waiting its turn:
+        ; Claude gets to it at its next stopping point (on the Code page, between its steps). Until
+        ; it turns up, it stays at the bottom of the reply, marked QUEUED.
+        if (said != "" && (now.work != "" || now.streaming || now.thinking))
+            Current.queued := said
     }
     if !empty
         Current.note := ""
@@ -500,8 +527,8 @@ PushCurrent() {
     if (Current.dim || Current.sample || Current.you = "" && Current.claude = "")
         return false
     Current.youStatus := Current.claudeStatus := "", Current.note := ""
-    if (Current.thinking || Current.work != "") {   ; no dots (the reply never came) or status line in the history
-        Current.thinking := false, Current.work := ""
+    if (Current.thinking || Current.work != "" || Current.queued != "") {   ; no dots (the reply never came), status line or queued words in the history
+        Current.thinking := false, Current.work := "", Current.queued := ""
         LayOutExchange(Current)
     }
     History.Push(Current)
@@ -588,7 +615,9 @@ ShowYourWords(said) {
 ; While voice mode or dictation is listening, your words show up in the message box as you talk;
 ; those count as the newest thing you said, before Claude has replied to them.
 ReadConversation(hwnd) {
-    found := {you: "", parts: [], streaming: false, done: false, work: ""}
+    ; Reading goes on past your newest message to the one before it, for the reply in between
+    ; (prevYou, prevClaude): it can still change after you've said something new (see UpdateCaptions).
+    found := {you: "", parts: [], newest: "", prevYou: "", streaming: false, done: false, work: ""}
     groups := GetElements(hwnd, UIA_GROUP)
     chat := ""
     for g in groups
@@ -603,9 +632,10 @@ ReadConversation(hwnd) {
             if IsMessage((g := groups[i--]).name)
                 AddMessage({el: g.el, name: g.name, type: UIA_GROUP}, found)
     }
-    parts := [], i := found.parts.Length
-    while (i >= 1)
-        parts.Push(found.parts[i--])   ; found.parts is newest first
+    ; The parts are newest first. Once your newest message is found, the newest reply's parts are
+    ; in found.newest and found.parts holds the reply before it.
+    parts := OldestFirst(found.newest != "" ? found.newest : found.parts)
+    prevClaude := found.prevYou != "" ? PartsToMarkup(OldestFirst(found.parts)) : ""
     ; The mic is on while dictation's or voice mode's buttons show, voice mode (where Claude reads
     ; its replies out loud) is on while its microphone button shows (and listening, not muted,
     ; while that says "Turn off microphone"), and Claude is working on a reply while its Stop button
@@ -621,12 +651,20 @@ ReadConversation(hwnd) {
     side := SidebarRows(buttons)
     if (micOn && (said := PromptText(hwnd)) != "")
         return {you: said, claude: "", live: true, streaming: false, thinking: false, work: "", listening: true, voice: voiceOn,
-            micLive: micLive, sessions: side.rows, session: side.current}
+            micLive: micLive, sessions: side.rows, session: side.current, prevYou: "", prevClaude: ""}
     replyText := PartsToMarkup(parts)
     ; Thinking: working on your newest message, with no words of the reply yet.
     thinking := found.you != "" && replyText = "" && (working || found.streaming)
     return {you: found.you, claude: replyText, live: false, streaming: found.streaming, thinking: thinking,
-        work: working ? found.work : "", listening: micOn, voice: voiceOn, micLive: micLive, sessions: side.rows, session: side.current}
+        work: working ? found.work : "", listening: micOn, voice: voiceOn, micLive: micLive, sessions: side.rows, session: side.current,
+        prevYou: found.prevYou, prevClaude: prevClaude}
+}
+
+OldestFirst(list) {
+    out := [], i := list.Length
+    while (i >= 1)
+        out.Push(list[i--])
+    return out
 }
 
 ; The sessions (on the Code page) or chats (on the Chat and Cowork page) in Claude's sidebar, in
@@ -702,7 +740,11 @@ AddMessage(msg, found) {
             if (kid.type = UIA_TEXT && name != "" && !IsWhenLabel(name))
                 text .= (text = "" ? "" : " ") name
         }
-        found.you := text != "" ? text : SubStr(label, 11), found.done := true
+        said := text != "" ? text : SubStr(label, 11)
+        if (found.newest = "")   ; your newest message: on to the reply before it
+            found.you := said, found.newest := found.parts, found.parts := []
+        else
+            found.prevYou := said, found.done := true
         return
     }
     if (Trim(msg.name) == "Currently streaming message")
@@ -936,6 +978,16 @@ LayOutExchange(ex, spreadMs := 0) {
         parts.Push({key: "work", y: y, textY: y, tokens: [], dots: false,
             line: FitWidth(ex.work, Look.smallFont, Look.inner - Look.workIndent)})
         y += Look.smallH
+    }
+    ; What you said while Claude was still busy, waiting its turn at the bottom (see ShowExchange).
+    if (ex.queued != "") {
+        y += Look.gap
+        tokens := Tokenize(ex.queued, false)
+        laid := ex.chat ? LayOutRight(tokens) : {h: LayOutTokens(tokens), bubble: ""}
+        KeepFading(before.Has("queued") ? before["queued"] : [], tokens, spreadMs, ex)
+        parts.Push({key: "queued", label: "YOU", color: "you", y: y, textY: y + Look.labelH + Look.labelGap,
+            tokens: tokens, dots: false, align: ex.chat ? "right" : "", bubble: laid.bubble})
+        y += Look.labelH + Look.labelGap + laid.h
     }
     ; Where the live view of this exchange can start cleanly: at a label, a paragraph or a list item
     ; (stops), failing that at a line of words (lineStops), and failing that at any line at all
@@ -1523,11 +1575,16 @@ ClaudePart() {
     return ""
 }
 
-; Whether the start of Claude's newest reply is above what the box is headed to show (t), so the
-; arrow at the top says there's more up there. Scrolled back, the scroll bar says that instead,
-; and once you've scrolled up to the start of the reply, you've seen it.
+; Whether there's something above what the box is headed to show (t) that you haven't read, so
+; the arrow at the top says so: the start of Claude's newest reply, or new words in the exchange
+; before it (see UpdateCaptions). Scrolled back, the scroll bar says that instead, and once you've
+; scrolled up to them, you've seen them.
 MoreAbove(t) {
-    if (View.scrolled || Drag.resizing || Current.sawTop || !(part := ClaudePart()))
+    if (View.scrolled || Drag.resizing)
+        return false
+    if (History.Length && History[History.Length].unseen)
+        return true
+    if (Current.sawTop || !(part := ClaudePart()))
         return false
     return Current.y + part.textY < t.bottom - t.h - 1
 }
@@ -1824,6 +1881,9 @@ Frame() {
     ; scrolled up to the start of the reply, it stays away.
     if (View.scrolled && !Current.sawTop && (part := ClaudePart()) && Current.y + part.textY >= View.bottom - View.h - 1)
         Current.sawTop := true
+    ; New words in the exchange before count as seen once you've scrolled up to them (or it all fits).
+    if (History.Length && (prev := History[History.Length]).unseen && View.bottom - View.h < prev.y + (View.scrolled ? prev.height : 1))
+        prev.unseen := false
     above := MoreAbove(t) ? 1 : 0
     if (above && !Anim.aboveAt)
         Anim.aboveAt := now
@@ -1852,7 +1912,7 @@ Frame() {
     following := FollowFrame(now, dt, smooth)
     ; "Listening", "Thinking" and "Responding" pulse gently, which only needs drawing now and then
     ; (a little more often for the thinking dots).
-    pulsing := Anim.target && (Current.note != "" || Current.youStatus != "" || Current.claudeStatus != "" || Current.work != ""
+    pulsing := Anim.target && (Current.note != "" || Current.youStatus != "" || Current.claudeStatus != "" || Current.work != "" || Current.queued != ""
         || Anim.listen > 0 || Anim.panel > 0)
     ; With nothing left to do, the last frame is drawn and the animation stops, unless Claude is
     ; talking, when the glow can move on at any moment.
@@ -2162,7 +2222,7 @@ DrawConversation(top, viewH, shadow) {
                 DrawDots(textTop, EdgeFade(edges, textTop, lineH))
                 continue
             }
-            dim := live && part.key = "you" && ex.dim ? 0.55 : 1
+            dim := !live ? 1 : part.key = "queued" ? 0.7 : part.key = "you" && ex.dim ? 0.55 : 1
             if part.bubble   ; what you said, in a bubble (on the Chat page, with Bubbles on)
                 FillRoundRect(Look.pad + part.bubble.x, textTop, part.bubble.w, part.bubble.h, Min(part.bubble.h / 2, 16 * Look.s),
                     ARGB(dim * (Look.colors.light ? 0.13 : 0.2), Look.colors.you))
@@ -2240,6 +2300,7 @@ DrawLabel(ex, part, y, a, shadow) {
     switch part.key {
         case "note": status := "ON", pulse := true
         case "you": pulse := live && ex.youStatus != "", status := pulse ? ex.youStatus : ex.time
+        case "queued": status := "QUEUED", pulse := true
         case "claude":
             if (live && Voice.on && Voice.ex = ex)
                 status := "SPEAKING", pulse := true
