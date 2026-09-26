@@ -45,10 +45,7 @@ STATE_FILE := A_Temp "\claude-voice-on-off.ini"                 ; shared with cl
 ; -----------------------------------------------------------------------------
 
 ; UI Automation lets the script find Claude's buttons by their names instead of by screen position.
-; If Claude's window stops answering for a moment, each request gives up after 4 seconds instead of
-; Windows' usual 20, so nothing hangs that long (like "Hey Claude" not hearing you meanwhile).
-UIA := ComObject("{e22ad333-b25f-460c-83d0-0581107395c9}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")   ; CUIAutomation8
-try ComCall(63, ComObjQuery(UIA, "{34723aff-0c9d-49d0-9896-7ab52df8cd8a}"), "uint", 4000)   ; IUIAutomation2 TransactionTimeout
+UIA := ComObject("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
 UIA_BUTTON := 50000, UIA_EDIT := 50004, UIA_RADIO := 50013, UIA_TEXT := 50020, UIA_GROUP := 50026
 LogLines := []
 
@@ -61,11 +58,9 @@ Main() => RunVoiceButton(A_Args.Length && A_Args[1] = "start-only")
 ; dictation on, and leaves them alone if they're already on.
 RunVoiceButton(startOnly := false) {
     LogLines.Length := 0
-    Log("Starting")
     DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")   ; work in real screen pixels
     try {
         hwnd := OpenClaude()
-        Log("Claude is in front")
         ; Right after launch the page needs a moment to load.
         if !WaitFor(() => FindByPrefix(hwnd, UIA_RADIO, "Chat and Cowork"), 20000)
             throw Error("Couldn't read Claude's window. It may still be loading, so try the button again.")
@@ -505,44 +500,6 @@ IsEndVoiceButton(name) {
         || name ~= "i)^(end|hang up)$"
 }
 
-; ---- Claude's sound -----------------------------------------------------------
-
-; Windows' level meters for the sound Claude's app is playing, one per sound stream it has open.
-ClaudeSoundMeters() {
-    meters := []
-    devices := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")   ; MMDeviceEnumerator
-    ComCall(3, devices, "int", 0, "uint", 1, "ptr*", &p := 0)   ; EnumAudioEndpoints(speakers, active)
-    speakers := ComPtr(p)
-    ComCall(3, speakers, "uint*", &count := 0)                  ; GetCount
-    loop count {
-        try {
-            ComCall(4, speakers, "uint", A_Index - 1, "ptr*", &p := 0)   ; Item
-            device := ComPtr(p)
-            ComCall(3, device, "ptr", Guid("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}"), "uint", 23, "ptr", 0, "ptr*", &p := 0)   ; Activate(IAudioSessionManager2)
-            manager := ComPtr(p)
-            ComCall(5, manager, "ptr*", &p := 0)                 ; GetSessionEnumerator
-            sessions := ComPtr(p)
-            ComCall(3, sessions, "int*", &n := 0)                ; GetCount
-            loop n {
-                try {
-                    ComCall(4, sessions, "int", A_Index - 1, "ptr*", &p := 0)   ; GetSession
-                    session := ComPtr(p)
-                    ComCall(14, ComObjQuery(session, "{bfb7ff88-7239-4fc9-8fa2-07c950be9c6d}"), "uint*", &pid := 0)   ; IAudioSessionControl2.GetProcessId
-                    if (ProcessGetName(pid) = "claude.exe")
-                        meters.Push(ComObjQuery(session, "{C02216F6-8C67-4B5B-9D00-D008E73E0064}"))   ; IAudioMeterInformation
-                }
-            }
-        }
-    }
-    return meters
-}
-
-Guid(text) {
-    buf := Buffer(16)
-    DllCall("ole32\CLSIDFromString", "wstr", text, "ptr", buf)
-    return buf
-}
-
 ; ---- Claude's window ----------------------------------------------------------
 
 FindClaudeWindow() {
@@ -567,8 +524,7 @@ OpenClaude() {
     if (WinGetMinMax(hwnd) = -1)
         WinRestore hwnd
     WinActivate hwnd
-    if !WinWaitActive(hwnd, , 3)
-        Log("Claude didn't come to the front within 3 seconds")
+    WinWaitActive(hwnd, , 3)
     WakeAccessibility(hwnd)
     return hwnd
 }

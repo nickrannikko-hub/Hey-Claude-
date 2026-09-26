@@ -1,8 +1,7 @@
 # Claude Stream Deck Voice Controls (unofficial)
 
-Stream Deck buttons (or keyboard shortcuts), a hands-free **"Hey Claude"** wake word, and
-on-screen **captions** of your conversation for the Claude desktop app on Windows, built with
-[AutoHotkey v2](https://www.autohotkey.com/).
+Stream Deck buttons (or keyboard shortcuts) and a hands-free **"Hey Claude"** wake word for the
+Claude desktop app on Windows, built with [AutoHotkey v2](https://www.autohotkey.com/).
 
 > **Unofficial.** Not made by or affiliated with Anthropic. These scripts work by finding and
 > pressing buttons in Claude's app by their names, so a Claude update that renames a button can
@@ -19,7 +18,6 @@ on-screen **captions** of your conversation for the Claude desktop app on Window
 | `claude-voice-on-off.ahk` | **Chat page:** voice mode on/off. **Code page:** dictation on/off (types what you say; you send it). |
 | `claude-voice-on-off-send.ahk` | Like the one above, but dictation **sends itself** when you stop talking, then listens again after Claude replies, for a back-and-forth conversation. |
 | `claude-hey-claude.ahk` | Listens for **"Hey Claude"**. On the Chat page it starts voice mode; on the Code page it takes one dictated message and sends it. Running it again turns it off. |
-| `claude-captions.ahk` | **On-screen captions:** a small box in the corner of your screen showing what you say and what Claude says back, as it happens. In voice mode each word lights up as Claude says it. Running it again turns it off. |
 | `claude-hotkeys.ahk` | Keyboard shortcuts for all of the above, for use **without a Stream Deck**. |
 | `claude-setup-check.ahk` | Checks everything the scripts need and tells you what's missing. Run it first. |
 
@@ -56,18 +54,15 @@ on-screen **captions** of your conversation for the Claude desktop app on Window
      | | | | |
      |---|---|---|---|
      | Open Claude | Close Claude | Switch page | Hey Claude on/off |
-     | Open chat | Voice on/off | Voice on/off + send | Captions on/off |
+     | Open chat | Voice on/off | Voice on/off + send | |
 
    - **No Stream Deck:** double-click `claude-hotkeys.ahk` for keyboard shortcuts (see
      [Keyboard shortcuts](#keyboard-shortcuts) below).
 7. **"Hey Claude":** double-click `claude-hey-claude.ahk` (or give it a button or shortcut; it's an
    on/off toggle). A small AutoHotkey icon appears near the clock while it listens. Right-click it
    and choose **Teach it my voice...**, then say "Hey Claude" six times. That tunes it to your voice.
-8. **Captions (optional):** double-click `claude-captions.ahk` (it's an on/off toggle too). A box
-   shows up in the top right corner of your main monitor as you talk with Claude. Point at it and
-   click the cog to change how it looks.
-9. **Optional, start things with Windows:** press Win+R, type `shell:startup`, and put shortcuts to
-   `claude-hey-claude.ahk`, `claude-captions.ahk` and/or `claude-hotkeys.ahk` in the folder that opens.
+8. **Optional, start things with Windows:** press Win+R, type `shell:startup`, and put shortcuts to
+   `claude-hey-claude.ahk` and/or `claude-hotkeys.ahk` in the folder that opens.
 
 ## Keyboard shortcuts
 
@@ -82,7 +77,6 @@ left Alt, so the AltGr key on some keyboards doesn't set them off):
 | Ctrl + Alt + V | Voice mode or dictation, on/off |
 | Ctrl + Alt + S | Voice mode or dictation, on/off, sending by itself |
 | Ctrl + Alt + H | "Hey Claude" listening, on/off |
-| Ctrl + Alt + T | On-screen captions, on/off |
 | Ctrl + Alt + Shift + Q | Quit Claude (Shift added so it's hard to hit by accident) |
 
 Its icon sits near the clock while it runs; right-click it to see the list or exit. To change a
@@ -113,23 +107,6 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
 - Right-click the tray icon to **pause listening** (this frees the mic), run **Teach it my voice**,
   open **Windows voice training**, or exit.
 
-**Captions** (`claude-captions.ahk`)
-- A small box in the top right corner of your main monitor shows what you say and Claude's reply as
-  they happen, laid out like Claude's window: paragraphs, lists, `code`, and on the Code page the
-  steps Claude takes and what it's doing ("2m 5s · 1.3k tokens · Thinking…"). It fades in when
-  something is said and away once things go quiet.
-- **Tabs** on top show which page Claude is on, **Chat & Cowork** or **Code**; click the other one
-  to switch Claude over. The **☰** tab lists your chats (or Code sessions) like Claude's sidebar
-  does; click one to open it.
-- On the Chat page your words sit on the right and Claude's on the left (bubbles are an option).
-- **Voice mode:** each word lights up as Claude says it, and a soft blue light at the bottom of the
-  box shows when Claude is listening for you. A **VOICE MODE** tag sits by your words.
-- Scroll the mouse wheel over the box to read back through the conversation. A small arrow at the
-  top means some of the reply is above. Point at the box to drag it by the grip at the top or
-  resize it from a corner; "Put the box back in its corner" in its tray menu undoes a move.
-- Clicks go straight through the box to whatever is underneath (only its handles and tabs take
-  clicks), and it never takes the keyboard from what you're typing in.
-
 ## Settings
 
 Each script has a Settings block near the top. The most useful ones:
@@ -144,8 +121,6 @@ Each script has a Settings block near the top. The most useful ones:
 | Hey Claude | `MIN_CONFIDENCE`, `MIN_LOUDNESS` | How sure and how loud "Hey Claude" must be. **Teach it my voice** sets both and saves them in `claude-hey-claude.ini` |
 | Hey Claude | `LOOK_ALIKES` | Phrases "Hey Claude" must beat. Add any word that keeps setting it off |
 | Hey Claude | `VOICE_IDLE_MS` | How long voice mode can sit on "Listening" before it ends (5 s; 0 turns it off) |
-| Captions | the **cog** on the box | Font and size, dark/light colors, how see-through it is (down to just the words), corner, width and height, how fast words fade in, scroll smoothness, how the box appears, how long it stays up, and whether words light up in voice mode. Saved in `claude-captions.ini` |
-| Captions | **Glow timing** (same window) | If the lit-up word runs ahead of Claude's voice (common with sound mixers like Voicemeeter, or wireless headphones), slide it right |
 
 ## Privacy
 
@@ -153,9 +128,6 @@ Each script has a Settings block near the top. The most useful ones:
   don't send anything anywhere; only Claude's own dictation and voice mode, once started, send audio
   to Anthropic the way they normally do.
 - While the listener runs, Windows shows AutoHotkey as using the microphone.
-- The captions only read Claude's window on your PC. For the lit-up words and the listening light
-  in voice mode they check how loud Claude's app and your microphone are, but they don't record or
-  send anything.
 - Log files are saved next to the scripts (`...-log.txt`). The voice + send log includes the text of
   messages it sent, and the "Hey Claude" log notes goodbyes. **Teach it my voice** saves your
   recordings in `hey-claude-voice-samples`. Keep those to yourself; `.gitignore` leaves them out.
@@ -172,9 +144,6 @@ Each script has a Settings block near the top. The most useful ones:
   `MinLoudness` in `claude-hey-claude.ini`.
 - **The buttons can't start Claude:** your install may use a different app ID. The setup check
   shows the exact `CLAUDE_APP` value to put at the top of each script.
-- **The captions' lit-up words run ahead of (or behind) Claude's voice:** point at the box, click
-  the cog, and move **Glow timing** while Claude talks.
-- **The captions' ☰ list is empty:** it reads Claude's sidebar, so keep the sidebar open in Claude.
 - **A script can't find a button:** check Claude is in English. If Claude just updated, a button may
   have been renamed; the log's list of button names shows what it's called now.
 
