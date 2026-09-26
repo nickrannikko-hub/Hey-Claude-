@@ -9,6 +9,7 @@
 ; Default shortcuts (left Ctrl + left Alt + a letter):
 ;   O  Open Claude              P  Switch Chat/Code page     C  Open your chat
 ;   V  Voice/dictation on-off   S  Same, sending by itself   H  "Hey Claude" on-off
+;   T  On-screen captions on-off
 ;   Shift+Q  Quit Claude (Shift added so it's hard to hit by accident)
 
 #Requires AutoHotkey v2.0
@@ -26,7 +27,8 @@ SHORTCUTS := [
     ["<^<!c", "claude-open-chat.ahk", "Open your chat"],
     ["<^<!v", "claude-voice-on-off.ahk", "Voice mode or dictation, on/off"],
     ["<^<!s", "claude-voice-on-off-send.ahk", "Voice mode or dictation, on/off, sending by itself"],
-    ["<^<!h", "claude-hey-claude.ahk", "'Hey Claude' listening, on/off"]
+    ["<^<!h", "claude-hey-claude.ahk", "'Hey Claude' listening, on/off"],
+    ["<^<!t", "claude-captions.ahk", "On-screen captions, on/off"]
 ]
 ; -----------------------------------------------------------------------------
 

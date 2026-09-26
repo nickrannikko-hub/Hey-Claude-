@@ -57,7 +57,7 @@ LOOK_ALIKES := ["oh yeah", "yeah", "let's go", "okay", "alright", "come on", "wh
     "caught", "caught it", "i caught it", "got", "got it", "i got it", "call", "called", "called it",
     "because", "cold", "god", "oh god"]
 TEACH_COUNT     := 6      ; how many times "Teach it my voice" asks you to say it
-BEEP_WHEN_READY := true   ; beep once dictation is listening, so you know when to talk
+BEEP_WHEN_READY := false  ; Claude plays its own double beep when dictation starts listening, so ours (a loud one) is off
 KEEP_GOING_MS   := 0      ; one message per "Hey Claude": no listening again afterwards (the send button does the back-and-forth)
 HEY_LOG_FILE    := A_ScriptDir "\claude-hey-claude-log.txt"
 HEY_SETTINGS    := A_ScriptDir "\claude-hey-claude.ini"        ; where "Teach it my voice" saves its result
@@ -212,8 +212,24 @@ OnHeard(result) {
         return
     }
     HeyLog("Heard " heard ", starting")
+    TellCaptions()
+    started := A_TickCount
     try WakeAction()
+    ; What the voice button did, each step with its time, so a slow or failed start shows up here.
+    for line in LogLines
+        HeyLog("  voice button " line)
+    HeyLog(Format("Done after {:.1f} s", (A_TickCount - started) / 1000))
     Busy := false, LastDone := A_TickCount
+}
+
+; Lets claude-captions.ahk, if it's running, show right away that Claude is listening. The message
+; goes out to every window at once, which never waits on anything. (Looking for the captions'
+; hidden window by its title instead means asking every hidden window for its title, and the
+; speech recognizer's own windows in this script can take many seconds to answer while it's busy
+; hearing you, which held up "Hey Claude".)
+TellCaptions() {
+    static msg := DllCall("RegisterWindowMessage", "str", "ClaudeCaptions.HeyClaude", "uint")
+    DllCall("PostMessage", "ptr", 0xFFFF, "uint", msg, "ptr", 0, "ptr", 0)   ; HWND_BROADCAST
 }
 
 ; A second check on the same recording. Listening for just "Hey Claude", the recognizer squeezes
@@ -478,42 +494,6 @@ GoodbyeWatch() {
     CancelGoodbye()
     HeyLog(finished ? "Claude finished replying" : g.heardClaude ? "Claude was still talking; ending anyway" : "Didn't hear Claude reply out loud")
     GoodbyeAction()
-}
-
-; Windows' level meters for the sound Claude's app is playing, one per sound stream it has open.
-ClaudeSoundMeters() {
-    meters := []
-    devices := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")   ; MMDeviceEnumerator
-    ComCall(3, devices, "int", 0, "uint", 1, "ptr*", &p := 0)   ; EnumAudioEndpoints(speakers, active)
-    speakers := ComPtr(p)
-    ComCall(3, speakers, "uint*", &count := 0)                  ; GetCount
-    loop count {
-        try {
-            ComCall(4, speakers, "uint", A_Index - 1, "ptr*", &p := 0)   ; Item
-            device := ComPtr(p)
-            ComCall(3, device, "ptr", Guid("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}"), "uint", 23, "ptr", 0, "ptr*", &p := 0)   ; Activate(IAudioSessionManager2)
-            manager := ComPtr(p)
-            ComCall(5, manager, "ptr*", &p := 0)                 ; GetSessionEnumerator
-            sessions := ComPtr(p)
-            ComCall(3, sessions, "int*", &n := 0)                ; GetCount
-            loop n {
-                try {
-                    ComCall(4, sessions, "int", A_Index - 1, "ptr*", &p := 0)   ; GetSession
-                    session := ComPtr(p)
-                    ComCall(14, ComObjQuery(session, "{bfb7ff88-7239-4fc9-8fa2-07c950be9c6d}"), "uint*", &pid := 0)   ; IAudioSessionControl2.GetProcessId
-                    if (ProcessGetName(pid) = "claude.exe")
-                        meters.Push(ComObjQuery(session, "{C02216F6-8C67-4B5B-9D00-D008E73E0064}"))   ; IAudioMeterInformation
-                }
-            }
-        }
-    }
-    return meters
-}
-
-Guid(text) {
-    buf := Buffer(16)
-    DllCall("ole32\CLSIDFromString", "wstr", text, "ptr", buf)
-    return buf
 }
 
 NewestYouSaid(hwnd) => NewestMessages(hwnd).said
