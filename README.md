@@ -123,19 +123,31 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
   does; click one to open it.
 - On the Chat page your words sit on the right and Claude's on the left (bubbles are an option).
   Each page, and each chat or session, keeps its own conversation in the box.
+- **Is Claude done?** Claude's newest reply has Claude's spark by its name, and one line at the
+  end says what it's doing ("1m 12s · 3.4k tokens · Thinking…"). The spark moves while Claude is
+  working and settles when it's done, and the line turns into **Finished · 2m 12s · 5.1k tokens**.
 - **Voice mode:** a pill at the top says **LISTENING**, **THINKING** or **SPEAKING**, like Claude's
-  own voice mode, and a soft blue light at the bottom of the box shows when Claude is listening for
-  you. A **VOICE MODE** tag sits by your words. Words can also light up as Claude says them (an
-  option in the settings, off at first).
+  own voice mode. A light at the bottom of the box glows orange while Claude is listening to you
+  and blue while Claude talks. A **VOICE MODE** tag sits by your words. Words can also light up as
+  Claude says them (an option in the settings, off at first).
+- **Type to Claude:** click the **Message Claude…** box at the bottom and type; Enter sends it,
+  Shift+Enter starts a new line, and Esc puts it away (keeping what you typed).
+- **Read replies out loud (Code page):** an option in the settings reads Claude's replies in a
+  Windows voice, with the words showing as they're read.
 - Scroll the mouse wheel over the box to read back through the conversation. While you do, the
-  name of who's talking stays pinned at the top and each message's time fades in. A small arrow at
-  the top means there's something above you haven't seen yet, and a **NEW** line marks where it
-  starts. Point at the box to drag it by the grip at the top or resize it from a corner; "Put the
-  box back in its corner" in its tray menu undoes a move.
-- **Tuck it away:** point at the box and click the **–** next to the cog. The box shrinks into a
-  little tab with Claude's logo peeking out from the side of your screen. Point at the tab and it
-  pops out a bit; click it and the box grows back. While it's tucked away, the tab wiggles and
-  counts Claude's replies so you know something's waiting.
+  name of who's talking stays pinned at the top and each message's time fades in. Scroll to the
+  top and the box fetches older messages from Claude's window. A small arrow at the top means
+  there's something above you haven't seen yet, and a **NEW** line marks where it starts. Point at
+  the box to drag it by the grip at the top or resize it from a corner; "Put the box back in its
+  corner" in its tray menu undoes a move. It works on any monitor, at any display scaling.
+- **Message times:** Code sessions get their times from Claude Code's own session files on your
+  PC. Chats aren't kept on your PC, so for those the captions note the time of each message they
+  see from then on.
+- **Tuck it away:** point at the box and click the **–** next to the cog, at the top right. The
+  box (and the settings, if they're open) shrinks into a little tab with Claude's logo peeking out
+  from the side of your screen. Drag the tab to any edge. Point at it and it pops out a bit; click
+  it and everything comes back. While it's tucked away, the logo rocks while Claude works, spins
+  when it's done, and counts each new message (blue for Code, red for Chat & Cowork).
 - **Links:** when Claude's reply links to a website, small pills show at the bottom of the box
   (like "youtube.com"). Click one to open the page in a window attached right under the box; click
   it again to close it. Pages open in Microsoft Edge (or your usual browser if Edge isn't there).
@@ -156,7 +168,9 @@ Each script has a Settings block near the top. The most useful ones:
 | Hey Claude | `MIN_CONFIDENCE`, `MIN_LOUDNESS` | How sure and how loud "Hey Claude" must be. **Teach it my voice** sets both and saves them in `claude-hey-claude.ini` |
 | Hey Claude | `LOOK_ALIKES` | Phrases "Hey Claude" must beat. Add any word that keeps setting it off |
 | Hey Claude | `VOICE_IDLE_MS` | How long voice mode can sit on "Listening" before it ends (5 s; 0 turns it off) |
-| Captions | the **cog** on the box | Font and size, colors (Dark, Light, Match Windows, themes like Midnight, Ocean, Forest, Sunset, Paper, Rosé and Mono, or your own with **Custom…**), how see-through it is (down to just the words), corner, width and height, how fast words fade in, scroll smoothness, how the box appears, how long it stays up, whether words light up in voice mode, bubbles on the Chat page, a gently floating box, typing sounds (soft clicks, Animal Crossing or Undertale style), the Claude tab's count and wiggle, and opening links by themselves. Saved in `claude-captions.ini` |
+| voice + send | `MAX_TALK_MS` | Dictation sends itself after this long, even if it still hears noise (3 minutes) |
+| Captions | the **cog** on the box | A settings window with tabs (**LOOK**, **TEXT**, **SOUND**, **MOTION**, **BOX**, **TUCK & LINKS**); point at a **?** to see what a setting does. Font and size, colors (Dark, Light, Match Windows, themes like Midnight, Ocean, Forest, Sunset, Paper, Rosé and Mono, or your own with **Custom**, which keeps them readable and has a **Default** button), how see-through it is (down to just the words), corner, width and height, how Claude's words come in (fading in, or typed out letter by letter), their speed, scroll smoothness, how the box appears and tucks away, how long it stays up, whether words light up in voice mode, bubbles on the Chat page, a gently floating box, **High FPS** (drawn as often as your screen refreshes), typing sounds (soft clicks, Animal Crossing or Undertale style) and their volume, hearing Claude in voice mode, reading Code replies out loud (voice and speed), the typing box, the Claude tab's count and wiggle, and opening links by themselves. **Reset to defaults** puts it all back. Saved in `claude-captions.ini` |
+| Captions | the **version** by the title | Switch to an earlier version of the captions kept in a `captions-versions\<version>` folder next to the script. To come back, turn the captions off and on again |
 | Captions | **Glow timing** (same window) | If the lit-up word runs ahead of Claude's voice (common with sound mixers like Voicemeeter, or wireless headphones), slide it right |
 
 ## Privacy
@@ -165,12 +179,14 @@ Each script has a Settings block near the top. The most useful ones:
   don't send anything anywhere; only Claude's own dictation and voice mode, once started, send audio
   to Anthropic the way they normally do.
 - While the listener runs, Windows shows AutoHotkey as using the microphone.
-- The captions only read Claude's window on your PC. For the lit-up words and the listening light
-  in voice mode they check how loud Claude's app and your microphone are, but they don't record or
-  send anything.
+- The captions only read Claude's window, and Claude Code's session files, on your PC. For the
+  lit-up words and the listening light in voice mode they check how loud Claude's app and your
+  microphone are, but they don't record or send anything. Reading replies out loud uses a Windows
+  voice on your PC.
 - Log files are saved next to the scripts (`...-log.txt`). The voice + send log includes the text of
   messages it sent, and the "Hey Claude" log notes goodbyes. **Teach it my voice** saves your
-  recordings in `hey-claude-voice-samples`. Keep those to yourself; `.gitignore` leaves them out.
+  recordings in `hey-claude-voice-samples`. The captions keep `claude-captions-times.txt`, noting
+  when each message was sent by its words. Keep those to yourself; `.gitignore` leaves them out.
 
 ## Troubleshooting
 
@@ -187,6 +203,9 @@ Each script has a Settings block near the top. The most useful ones:
 - **The captions' lit-up words run ahead of (or behind) Claude's voice:** point at the box, click
   the cog, and move **Glow timing** while Claude talks.
 - **The captions' ☰ list is empty:** it reads Claude's sidebar, so keep the sidebar open in Claude.
+- **The captions' words are hard to read with your own colors:** click the cog, and on the
+  **LOOK** tab click **Default** (twice) beside your colors, or **Reset to defaults** at the bottom
+  for every setting.
 - **The captions' box disappeared:** it may be tucked away. Look for the little Claude tab at the
   side of your screen and click it, or pick "Tuck the box into the side (or bring it back)" in its
   tray menu.

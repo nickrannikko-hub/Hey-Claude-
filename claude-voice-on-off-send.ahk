@@ -29,7 +29,9 @@
 ; ---- Settings ---------------------------------------------------------------
 SILENCE_MS     := 2000    ; end dictation after this much quiet (milliseconds)
 FIRST_WORDS_MS := 7000    ; end dictation if you haven't started talking within this long
-VOICE_LEVEL    := 0.02    ; mic level that counts as talking (0 to 1). Raise it if background noise keeps dictation going
+VOICE_LEVEL    := 0.02    ; mic level that counts as talking (0 to 1), at the least: talking also has to be well above
+                          ; the room's own noise (see WatchForSilence). Raise it if background noise keeps dictation going
+MAX_TALK_MS    := 180000  ; however it seems, stop dictation (and send what was said) after this long (milliseconds)
 BEEP_WHEN_READY := true   ; beep once dictation is listening, so you know when to talk
 KEEP_GOING_MS  := 1000    ; conversation mode: once Claude has finished replying, listen again this long after (ms). 0 = off (claude-hey-claude.ahk turns it off)
 NEXT_WORDS_MS  := 7000    ; in conversation mode, how long it waits for your next message before it stops listening
@@ -275,19 +277,33 @@ StartDictation(hwnd, dictateBtn) {
 }
 
 ; Ends dictation once you've been quiet for SILENCE_MS after talking, or if you haven't started
-; talking within firstWordsMs. Returns how it ended ("quiet", "no talking", or "stopped" when
-; something else ended it) and whether any talking was heard.
+; talking within firstWordsMs, or after MAX_TALK_MS whatever happens. Talking is what's louder than
+; VOICE_LEVEL and well above the room's own noise: the quietest moment of the last two seconds
+; (there are gaps between words even while you talk), so a noisy room (a fan, a video playing)
+; doesn't sound like talking that never ends. Returns how it ended ("quiet", "no talking", "too
+; long", or "stopped" when something else ended it) and whether any talking was heard.
 WatchForSilence(hwnd, firstWordsMs) {
     meter := OpenMicMeter()
     start := A_TickCount, lastVoice := 0, lastCheck := A_TickCount
-    quietMax := 0.0, voiceMax := 0.0
+    quietMax := 0.0, voiceMax := 0.0, recent := []
     loop {
         Sleep 100
         ComCall(3, meter, "float*", &level := 0)   ; GetPeakValue
-        if (level >= VOICE_LEVEL)
+        recent.Push(level)
+        if (recent.Length > 20)
+            recent.RemoveAt(1)
+        noise := level
+        for v in recent
+            noise := Min(noise, v)
+        if (level >= Max(VOICE_LEVEL, Min(0.15, noise * 2.5)))
             lastVoice := A_TickCount, voiceMax := Max(voiceMax, level)
         else
             quietMax := Max(quietMax, level)
+        if (A_TickCount - start >= MAX_TALK_MS) {
+            Log("Still hearing talking after " MAX_TALK_MS // 1000 " s, so dictation was stopped")
+            ended := "too long"
+            break
+        }
 
         if (lastVoice && A_TickCount - lastVoice >= SILENCE_MS) {
             Log("Quiet for " SILENCE_MS " ms after talking")

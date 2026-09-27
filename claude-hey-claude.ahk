@@ -54,6 +54,8 @@ VOICE_IDLE_MS   := 5000   ; end voice mode once it has just been "Listening" thi
 ; it off. None of them share a word with "Hey Claude", which would let the recognizer split it in two.
 LOOK_ALIKES := ["oh yeah", "yeah", "let's go", "okay", "alright", "come on", "what's up", "oh no", "no way",
     "nice", "wow", "yes", "cool", "okay cool", "oh cool", "so cool", "come on let's go",
+    "is cool", "was cool", "this is cool", "that was cool", "that's cool", "that is cool", "it's cool", "it was cool",
+    "pretty cool", "really cool", "very cool", "super cool", "how cool", "looks cool",
     "caught", "caught it", "i caught it", "got", "got it", "i got it", "call", "called", "called it",
     "because", "cold", "god", "oh god"]
 TEACH_COUNT     := 6      ; how many times "Teach it my voice" asks you to say it
