@@ -1,4 +1,4 @@
-; On-screen captions for Claude, version 1.3.1 (see CAPTIONS_VERSION)
+; On-screen captions for Claude, version 1.4.0 (see CAPTIONS_VERSION)
 ;
 ; Shows a small box in the top right corner of your main monitor with what you're saying to Claude
 ; and what Claude is saying back, so you can follow a voice conversation without looking at
@@ -24,12 +24,15 @@
 ; since captions were turned on (up to HISTORY_KEEP of them), two whole lines a notch, gliding to
 ; a stop as smoothly as the Scroll smoothness setting says, or drag the scroll bar on its right.
 ; Scroll back down past the newest, or move the mouse away, to return to the live captions, and
-; "LIVE" shows at the bottom for a moment.
+; "LIVE" shows at the bottom for a moment. While you scroll back, the name of whose words you're
+; reading stays in a strip at the top, and each message's time shows, fading a few seconds after
+; you stop (the one you're pointing at stays).
 ;
-; When the start of Claude's newest reply is above what the box shows (the box keeps up with the
-; reply's newest sections), a small arrow at the top of the box says there's more up there to
-; read. It nudges upward a few times as it shows up, then rests, and goes away once you've
-; scrolled up to the start of the reply.
+; When words of Claude's you haven't seen yet are above what the box shows (the box keeps up with
+; the reply's newest sections), a small arrow at the top of the box says there's more up there to
+; read. Words count as seen once they've been in the box for a moment. The arrow nudges upward a
+; few times as it shows up, then rests, and goes away once you've seen them. Scrolled back, a thin
+; line marked NEW shows where the words you haven't seen start, and fades once you have.
 ;
 ; In voice mode, where Claude reads its replies out loud, each word lights up as Claude says it:
 ; a soft glow in Claude's color hugs the letters Claude is on and sweeps along them, fading away
@@ -46,10 +49,25 @@
 ; beside the box of your sessions (on the Code page) or chats (on the Chat and Cowork page), as in
 ; Claude's sidebar; click one to go to it. On the Chat and Cowork page, what you say goes on the
 ; right and Claude's replies on the left, like a chat (put what you say in bubbles in the
-; settings, if you like); on the Code page, they go one under the other. While voice mode is on,
-; a VOICE MODE tag sits by what you say, and while Claude talks, its label says SPEAKING. Once
-; Claude has finished and voice mode is listening for you, a soft blue light breathes at the
-; bottom of the box, swelling as you talk.
+; settings, if you like); on the Code page, they go one under the other. Each page, and each
+; session or chat, keeps its own conversation in the box: going to another slides it in, and
+; coming back brings back what was there. While voice mode is on, a VOICE MODE tag sits by what
+; you say, and a pill at the top says LISTENING (blinking), THINKING or SPEAKING, like Claude's
+; own voice mode. Once Claude has finished and voice mode is listening for you, a soft blue light
+; breathes at the bottom of the box, swelling as you talk.
+;
+; Point at the box and a – shows beside the cog: click it to tuck the box away. It shrinks into a
+; small tab with Claude's logo, peeking out from the side of the screen. Point at the tab and it
+; slides out a little further; click it and the box grows back out of it. While it's tucked away,
+; the tab wiggles when Claude has something new and counts the replies that came in (either can
+; be turned off in the settings). The box can also tuck itself away there whenever it hides.
+;
+; When Claude's reply links to web pages, the first three show as small pills along the bottom of
+; the box, each saying where it goes ("youtube.com"). Click one to open the page in a browser
+; window attached under the box (or above it, if the box is at the bottom of the screen), which
+; moves with the box; click it again to close it. In the settings, the first link in each reply
+; can open by itself. (The page opens in Edge as a bare app window; without Edge, it opens in your
+; usual browser.)
 ;
 ; Point at the box and its handles show: drag the grip at the top middle to move it, or a corner
 ; to resize it. Only the handles take clicks; everywhere else, clicks go through to what's
@@ -66,24 +84,27 @@
 ; the keyboard away from the window you're typing in.
 ;
 ; Point at the box and a settings cog shows in its corner. Click it to change the font and size,
-; the colors (dark, light, or whichever Windows uses), how solid the background is (all the way
-; down to just the words), which corner the box sits in, its size, how quickly words fade in, how
-; the box shows up, how long it stays up, whether words light up as Claude says them (and how
-; long after the sound), and whether
-; what you say sits in bubbles on the Chat page. Changes show right away and are saved in
+; the colors (Dark, Light, whichever Windows uses, themes like Midnight, Ocean, Paper or Rosé, or
+; your own with Custom…), how solid the background is (all the way down to just the words), which
+; corner the box sits in, its size, how quickly words fade in, how the box shows up, how long it
+; stays up, whether words light up as Claude says them (and how long after the sound), whether
+; what you say sits in bubbles on the Chat page, whether the box floats gently, leaning toward the
+; mouse, soft sounds as Claude's words appear (clicks, or chatter like Animal Crossing's or
+; Undertale's), the Claude tab, and links. Changes show right away and are saved in
 ; claude-captions.ini next to this file.
 ;
 ; Running this file is an on/off toggle, like claude-hey-claude.ahk: the first time turns captions
 ; on, the next time turns them off (a double-click or a Stream Deck System > Open button both work).
 ; Its icon sits in the corner of the taskbar while it's on. Right-click the icon for:
 ;   Settings...     - the same as the cog (double-clicking the icon opens it too)
+;   Tuck the box into the side (or bring it back) - the same as the – by the cog, or the Claude tab
 ;   Hide captions   - stops showing the box until you pick it again
 ;   Exit
 ; To have it start with Windows, put a shortcut to this file in your Startup folder
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.3.1"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.4.0"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -93,7 +114,7 @@ CAPTIONS_VERSION := "1.3.1"   ; shown in the tray icon's tooltip and the setting
 ; are saved in claude-captions.ini, which wins over what's here. "Reset to defaults" comes back here.
 FONT           := "Segoe UI"
 FONT_SIZE      := 12            ; in points
-THEME          := "Dark"        ; "Dark", "Light" or "Match Windows"
+THEME          := "Dark"        ; "Dark", "Light", "Match Windows", one of the other THEMES below, or "Custom"
 BACKGROUND     := 90            ; how solid the background is: 0 (just the words) to 100 (solid)
 CORNER         := "Top right"   ; corner of the main monitor: "Top right", "Top left", "Bottom right" or "Bottom left"
 BOX_WIDTH      := 460           ; how wide the box is (at 100% display scaling)
@@ -104,9 +125,16 @@ SCROLL_SMOOTH  := 6             ; how long scrolling back glides, from 1 (snappi
 APPEAR         := "Pop"         ; how the box shows up and goes away: "Pop" (grows out of its corner),
                                 ; "Slide" (glides in from the edge of the screen) or "Fade"
 HIDE_AFTER     := 15            ; hide the box once nothing has changed for this many seconds. 0 keeps it showing
-FOLLOW_VOICE   := true          ; in voice mode, each word lights up as Claude says it
+FOLLOW_VOICE   := false         ; in voice mode, each word lights up as Claude says it
 BUBBLES        := false         ; on the Chat page, what you say sits in a bubble on the right (otherwise it's just on the right)
 GLOW_DELAY     := 250           ; how long after Claude's sound the glow follows it (ms): the sound takes a moment to reach your ears
+FLOAT_BOX      := false         ; the box drifts gently, and leans a little toward the mouse
+TYPING_SOUND   := "Off"         ; little sounds as Claude's words appear: "Off", "Soft clicks", "Animal Crossing" or "Undertale"
+CUSTOM_COLORS  := "1F1E1D,F5F4EE,8AB4F8,E08A6D,F2C4A8"   ; the "Custom" colors: background, words, you, Claude, code
+TUCK           := false         ; when the box hides by itself, it tucks into a tab with Claude's logo at the side of the screen too (the – beside the cog always does)
+TUCK_COUNT     := true          ; ...which counts the replies that come in while it's tucked away
+TUCK_WIGGLE    := true          ; ...and wiggles when Claude has something new
+AUTO_LINKS     := false         ; open the first link in each of Claude's replies under the box by itself
 ; These aren't in the settings window:
 LABEL_FONT     := "Segoe UI"    ; the labels and little indicators (YOU, CLAUDE, times, the badge) stay in this font
 LISTENING_TEXT := "I'm listening…"   ; shown (softly) after "Hey Claude", until you start talking
@@ -114,6 +142,8 @@ SENT_WAIT_MS   := 4000          ; after you speak, how long to wait for your mes
 NEW_BADGE_MS   := 2600          ; how long the "new message" badge shows, fading out at the end (ms)
 NEW_AFTER_MS   := 3000          ; Claude's words after it's been quiet (or taking steps) this long count as a new message (ms)
 LIVE_BADGE_MS  := 2200          ; how long "LIVE" shows at the bottom after you scroll back to the live captions (ms)
+SEEN_MS        := 1500          ; how long Claude's words have to be in full view to count as seen (ms)
+TIMES_MS       := 5000          ; how long the messages' times stay after you stop scrolling (ms)
 APPEAR_MS      := 450           ; how long the box takes to show up (ms)
 DISAPPEAR_MS   := 320           ; how long it takes to go away (ms)
 HISTORY_KEEP   := 50            ; how many earlier exchanges you can scroll back to
@@ -128,7 +158,8 @@ SIDEBAR_ROW    := "w-full shrink-0 border-none text-left"   ; how a session or c
 SETTINGS_FILE  := A_ScriptDir "\claude-captions.ini"
 ; -----------------------------------------------------------------------------
 
-THEMES := ["Dark", "Light", "Match Windows"]
+THEMES := ["Dark", "Light", "Match Windows", "Midnight", "Ocean", "Forest", "Sunset", "Paper", "Rosé", "Mono", "Custom"]
+TYPING_SOUNDS := ["Off", "Soft clicks", "Animal Crossing", "Undertale"]
 CORNERS := ["Top right", "Top left", "Bottom right", "Bottom left"]
 APPEAR_STYLES := ["Pop", "Slide", "Fade"]
 HIDE_CHOICES := ["5 seconds", "10 seconds", "15 seconds", "30 seconds", "1 minute", "Never"]
@@ -157,6 +188,12 @@ VoiceMode := false              ; voice mode is on
 VoiceMicLive := false           ; ...with its mic on (not muted)
 Sessions := {list: [], current: "", key: ""}   ; the sessions or chats in Claude's sidebar, and the one showing
 PanelGui := "", PanelCanvas := ""   ; the list of them beside the box
+; Each chat and session keeps its own history (see SwitchConversation): the one showing (ConvKey,
+; like "chat|General chat"), and the others put away, each as {current, history}.
+ConvKey := "", Conversations := Map()
+Minimized := false              ; you tucked the box away (with its –), so it stays in its tab until you click it
+PeekGui := "", PeekCanvas := "" ; the tab with Claude's logo the box tucks into
+Browser := {hwnd: 0, url: "", movedAt: 0}   ; the page from Claude's reply open under the box, if there is one
 Current := NewExchange()        ; the exchange showing now
 History := []                   ; earlier exchanges this session, oldest first
 ; What part of the conversation the box shows: its bottom edge and height (both easing toward
@@ -169,12 +206,22 @@ View := {bottom: 0.0, h: 0.0, bottomSpeed: 0.0, hSpeed: 0.0, scrolled: false, to
 ; saying there's more above is showing (above, since aboveAt), where the tab joined to the box is
 ; (tabLeft, tabRight, gliding to the page Claude is on), how open the list beside the box is
 ; (panel, heading for panelTarget), which of its rows you're pointing at (panelHot) and where it
-; is (panelX, panelY, panelH), how much the listening light shows (listen), and whether something
-; changed that needs drawing (dirty).
+; is (panelX, panelY, panelH), how much voice mode's blue light shows (listen), when the box last
+; slid over to another conversation and from which side (switchAt, switchDir), how open the strip
+; at the top that holds a name while you scroll back is (sticky), how much the messages' times
+; show (times), where the mouse is over the box (mouseY), when the last NEW line began to fade
+; (lineGoneAt), how far it leans toward the mouse with Float on (leanX, leanY), whether it's going
+; into or coming out of the Claude tab at the side (tucking), how much that tab shows (peek), how
+; much you're pointing at it (peekHover, peekHot), where it is (peekX, peekY), how many replies came
+; while tucked away (peekCount), when it last wiggled (wiggleAt), how much the row of links at the
+; bottom shows (links) and where each is (linkSpots), and whether something changed that needs
+; drawing (dirty).
 Anim := {running: false, last: 0, lastDraw: 0, p: 0.0, target: 0, hover: 0.0, hoverTarget: 0,
     hot: "", shown: false, x: 0, y: 0, h: 0, bar: "", liveAt: 0, above: 0.0, aboveAt: 0,
     tabLeft: 0.0, tabRight: 0.0, tabSpeedL: 0.0, tabSpeedR: 0.0, panel: 0.0, panelTarget: 0, panelHot: 0,
-    panelX: 0, panelY: 0, panelH: 0, listen: 0.0, dirty: false}
+    panelX: 0, panelY: 0, panelH: 0, listen: 0.0, switchAt: 0, switchDir: 0, sticky: 0.0, times: 0.0, mouseY: "",
+    lineGoneAt: 0, leanX: 0.0, leanY: 0.0, leanSX: 0.0, leanSY: 0.0, tucking: false, peek: 0.0, peekHover: 0.0,
+    peekHot: false, peekX: 0, peekY: 0, peekW: 0, peekCount: 0, wiggleAt: 0, links: 0.0, linkSpots: [], dirty: false}
 ; Dragging a handle with the mouse: which (mode), where it started, and the box as it was then.
 Drag := {mode: "", resizing: false}
 ; Following Claude's voice (see FollowClaudesVoice): whether it is (on), which of the reply's
@@ -182,13 +229,13 @@ Drag := {mode: "", resizing: false}
 ; far through it as a fraction, and pos, which glides after it), Claude's pace (rate, in words a
 ; second while it talks), how loud it is (env) and has been lately (level), how long it has talked
 ; (talkMs), where it has been lately (trail, for the glow to follow a moment behind), and how bright
-; the glow on the words is (shown, glow). Also when Claude was last heard (loudAt) and how loud your
-; mic is (mic), for the listening light. A pretend voice (fake) can stand in for Claude's, to show
+; the glow on the words is (shown, glow). Also when Claude was last heard (loudAt), and how loud
+; Claude (claudeLevel) and your mic (mic) are, for voice mode's blue light. A pretend voice (fake) can stand in for Claude's, to show
 ; what it looks like (demo).
 Voice := {on: false, ticking: false, fake: "", demo: false, ex: "", parts: "", part: "", list: [], word: 0.0,
     pos: 0.0, posSpeed: 0.0, rate: 4.0, env: 0.0, level: 0.0, at: 0, loudMs: 0, quietMs: 0, heldMs: 0,
     talkMs: 0, paused: true, finished: false, snapTo: "", passed: 0, phraseStart: 0.0, phraseMs: 0,
-    shown: 0.0, glow: 0.0, trail: [], loudAt: 0, mic: 0.0, micMeter: "", micTried: false}
+    shown: 0.0, glow: 0.0, trail: [], loudAt: 0, claudeLevel: 0.0, mic: 0.0, micMeter: "", micTried: false}
 VoiceModeAt := 0                ; when voice mode was last seen on
 ScrollAt := 0                   ; when you last scrolled, to hold off reading Claude's window meanwhile
 Shown := {you: "", claude: "", live: false, streaming: false, thinking: false, work: ""}   ; what was last read from Claude's window
@@ -219,6 +266,7 @@ CaptionsMain() {
     A_TrayMenu.Add("Settings...", (*) => OpenSettings())
     A_TrayMenu.Add("Hide captions", ToggleHidden)
     A_TrayMenu.Add("Put the box back in its corner", (*) => PutBack())
+    A_TrayMenu.Add("Tuck the box into the side (or bring it back)", (*) => Minimized ? OpenFromPeek() : Minimize())
     A_TrayMenu.Add()
     A_TrayMenu.Add("Exit", (*) => ExitApp())
     A_TrayMenu.Default := "Settings..."
@@ -304,7 +352,7 @@ UpdateCaptions() {
             WakeAccessibility(hwnd)
         LastHwnd := hwnd
         now := hwnd ? ReadConversation(hwnd) : {you: "", claude: "", live: false, streaming: false, thinking: false, work: "", listening: false, voice: false,
-            micLive: false, sessions: [], session: ""}
+            micLive: false, sessions: [], session: "", convo: ""}
     } catch {
         return   ; the window changed while it was being read; try again next time
     }
@@ -322,6 +370,14 @@ UpdateCaptions() {
     if (key != Sessions.key) {
         Sessions := {list: now.sessions, current: now.session, key: key}
         Kick()
+    }
+    ; Each chat and session keeps its own history: when Claude shows another one (or the other
+    ; page), the box puts this one away and brings that one back. The conversation's title bar also
+    ; says which page it's on.
+    if (now.convo != "") {
+        NoticePage(StrSplit(now.convo, "|")[1])
+        if (now.convo != ConvKey)
+            SwitchConversation(now.convo)
     }
     ; Which page Claude is on, for the tab on top of the box. It's checked now and then: it's slow to find.
     if (hwnd && A_TickCount - PageAt > 1500) {
@@ -345,15 +401,13 @@ UpdateCaptions() {
     }
     ; What Claude said before your newest message can still change after it: a reply you talked
     ; over goes on until Claude gets to what you said, and your message then lands in the middle of
-    ; it. So the exchange before is kept up to date in the history, and new words there that you
-    ; haven't seen get the arrow at the top of the box.
+    ; it. So the exchange before is kept up to date in the history (and its new words, not seen
+    ; yet, get the arrow at the top of the box).
     if (now.HasOwnProp("prevYou") && now.prevYou != "" && now.prevClaude != "" && History.Length) {
         last := History[History.Length]
         if (last.you == now.prevYou && last.claude != now.prevClaude) {
             Critical
-            words := ReplyWords(now.prevClaude)
-            if (words != last.words)
-                last.unseen := true, last.words := words
+            last.words := ReplyWords(now.prevClaude)
             last.claude := now.prevClaude
             LayOutExchange(last), Place()
             Critical "Off"
@@ -433,6 +487,34 @@ OpenSession(title) {
     }
 }
 
+; Claude is showing another conversation: a different chat or session, or the other page. Each
+; keeps its own history, so this one's is put away and that one's brought back (or started fresh),
+; and the box slides over to it, from the side its tab is on (or from below, for another chat or
+; session on the same page), with its words flowing in.
+SwitchConversation(key) {
+    global Current, History, ConvKey, Waiting
+    if (ConvKey = "") {   ; the first one: it's the one showing already
+        ConvKey := key
+        return
+    }
+    Critical
+    Conversations[ConvKey] := {current: Current.sample ? NewExchange() : Current, history: History}
+    was := StrSplit(ConvKey, "|")[1], now := StrSplit(key, "|")[1]
+    ConvKey := key
+    if Conversations.Has(key) {
+        saved := Conversations[key], Conversations.Delete(key)
+        Current := saved.current, History := saved.history
+    } else {
+        Current := NewExchange(), History := []
+    }
+    Current.loaded := true   ; what it shows next was already there, so it isn't "new"
+    Waiting := false, View.scrolled := false, View.bottomSpeed := View.hSpeed := 0
+    Anim.switchAt := A_TickCount, Anim.switchDir := was = now ? 0 : now = "code" ? 1 : -1
+    Place(), SnapView(), ReplayWords()
+    Critical "Off"
+    Kick()
+}
+
 ; Changes how often Claude's window is read.
 ReadEvery(ms) {
     static every := CHECK_EVERY_MS
@@ -442,13 +524,16 @@ ReadEvery(ms) {
 
 ; An exchange: what you said and Claude's reply, as the box shows them, plus a note while there's
 ; no conversation. parts holds each one laid out: its label, and its words with where each goes.
-; sawTop notes that you've scrolled up to the start of the reply, so the arrow saying there's more
-; above stays away, chat that it's from the Chat page, where what you said goes on the right, and
-; queued what you said next while Claude was still busy with this reply (see ShowExchange), and
-; unseen that new words came into its reply after it moved up into the history.
-NewExchange() => {note: "", you: "", youStatus: "", dim: false, claude: "", claudeStatus: "", thinking: false, chat: Page = "chat", queued: "", unseen: false,
+; chat notes that it's from the Chat page, where what you said goes on the right, queued what you
+; said next while Claude was still busy with this reply (see ShowExchange),
+; loaded that it's from a conversation just switched to, so what it shows next was already there,
+; and which of its reply's words you've seen (see CheckSeen): seen, since when others have been in
+; view, and where the first you haven't seen starts (unseenAt, its paragraph's y in the exchange,
+; or ""; lastUnseenAt and newGoneAt for the NEW line fading once you have).
+NewExchange() => {note: "", you: "", youStatus: "", dim: false, claude: "", claudeStatus: "", thinking: false, chat: Page = "chat", queued: "", loaded: false,
     work: "", time: FormatTime(, "h:mm tt"), replyTime: "", newAt: 0, newTime: "", words: "", wordsAt: 0, saidAt: 0, sample: false, restores: false,
-    parts: [], stops: [], lineStops: [], anyStops: [], height: 0, y: 0, fadeUntil: 0, sawTop: false}
+    parts: [], stops: [], lineStops: [], anyStops: [], spans: [], height: 0, y: 0, fadeUntil: 0,
+    seen: Map(), since: Map(), unseenAt: "", lastUnseenAt: "", newGoneAt: 0, sounded: 0, links: [], linkOpened: false}
 
 HasConversation() => Current.you != "" || Current.claude != "" || Current.thinking
 
@@ -458,6 +543,7 @@ ShowExchange(now, spreadMs := CHECK_EVERY_MS) {
     global Current
     isSample := now = SAMPLE
     empty := now.you = "" && now.claude = "" && !now.thinking
+    fresh := Current.loaded, Current.loaded := false
     if (isSample != Current.sample) {
         Current := NewExchange()   ; to or from the settings' example, which isn't kept
         Current.sample := isSample
@@ -486,21 +572,34 @@ ShowExchange(now, spreadMs := CHECK_EVERY_MS) {
         Current.note := ""
     if (now.you != Current.you)
         Current.saidAt := A_TickCount
+    wasBusy := Current.thinking || Current.claudeStatus != "" || Current.work != ""
     Current.you := now.you, Current.dim := false, Current.youStatus := now.live ? "LISTENING" : ""
     Current.claude := now.claude, Current.thinking := now.thinking, Current.work := now.work
     Current.claudeStatus := now.thinking ? "THINKING" : now.streaming ? "RESPONDING" : ""
+    Current.links := now.HasOwnProp("links") ? now.links : []
+    ; Claude has finished a reply: if the box is tucked away, its tab counts it and wiggles; and its
+    ; first link opens under the box, if you asked for that.
+    if (wasBusy && !Current.thinking && Current.claudeStatus = "" && Current.work = "" && Current.claude != "" && !fresh) {
+        Nudge(true)
+        if (Settings.AutoLinks && Current.links.Length && !Current.linkOpened && !isSample)
+            Current.linkOpened := true, SetTimer(OpenPage.Bind(Current.links[1].url), -1)
+    }
     if ((now.claude != "" || now.thinking) && Current.replyTime = "")   ; a new reply: note when, for its label
         Current.replyTime := FormatTime(, "h:mm tt")
     ; A new message gets the "new message" badge: Claude's first words, or new words after it's
-    ; been quiet (or busy taking steps) for a while.
+    ; been quiet (or busy taking steps) for a while. What was already there when captions started,
+    ; or when you went to this conversation, isn't new (and counts as seen: you'd have read it in
+    ; Claude's window).
     words := ReplyWords(now.claude)
+    already := fresh || A_TickCount - Started < 3000
     if (words != Current.words) {
-        if (words != "" && (Current.words = "" || A_TickCount - Current.wordsAt > NEW_AFTER_MS)
-            && !isSample && A_TickCount - Started > 3000)
-            Current.newAt := A_TickCount, Current.newTime := FormatTime(, "h:mm tt")
+        if (words != "" && (Current.words = "" || A_TickCount - Current.wordsAt > NEW_AFTER_MS) && !isSample && !already)
+            Current.newAt := A_TickCount, Current.newTime := FormatTime(, "h:mm tt"), Nudge(false)
         Current.words := words, Current.wordsAt := A_TickCount
     }
     LayOutExchange(Current, spreadMs)
+    if already
+        MarkAllSeen(Current)
     Place()
 }
 
@@ -651,13 +750,17 @@ ReadConversation(hwnd) {
     side := SidebarRows(buttons)
     if (micOn && (said := PromptText(hwnd)) != "")
         return {you: said, claude: "", live: true, streaming: false, thinking: false, work: "", listening: true, voice: voiceOn,
-            micLive: micLive, sessions: side.rows, session: side.current, prevYou: "", prevClaude: ""}
+            micLive: micLive, sessions: side.rows, session: side.current, convo: side.convo, prevYou: "", prevClaude: ""}
     replyText := PartsToMarkup(parts)
+    links := [], seen := Map()   ; the web pages the reply links to, up to three
+    for part in parts
+        if (part.type = "link" && !seen.Has(part.url) && links.Length < 3)
+            links.Push({text: part.text, url: part.url}), seen[part.url] := true
     ; Thinking: working on your newest message, with no words of the reply yet.
     thinking := found.you != "" && replyText = "" && (working || found.streaming)
     return {you: found.you, claude: replyText, live: false, streaming: found.streaming, thinking: thinking,
         work: working ? found.work : "", listening: micOn, voice: voiceOn, micLive: micLive, sessions: side.rows, session: side.current,
-        prevYou: found.prevYou, prevClaude: prevClaude}
+        convo: side.convo, prevYou: found.prevYou, prevClaude: prevClaude, links: links}
 }
 
 OldestFirst(list) {
@@ -670,14 +773,16 @@ OldestFirst(list) {
 ; The sessions (on the Code page) or chats (on the Chat and Cowork page) in Claude's sidebar, in
 ; order, as {title, status}. Each has a "More options for ..." button, and its own button is named
 ; with what it's doing first, like "Running Monitor overlay UI" or "Idle General chat". Also the one
-; showing (current), whose title has a rename button, like "General chat, rename chat".
+; showing (current), whose title has a rename button, like "General chat, rename chat" (or "...,
+; rename session" on the Code page), and so which conversation is showing (convo, like
+; "chat|General chat"), or "" if there's no title to go by.
 SidebarRows(buttons) {
-    titles := [], current := ""
+    titles := [], current := "", convo := ""
     for button in buttons {
         if StartsWith(button.name, "More options for ")
             titles.Push(SubStr(button.name, 18))
-        else if RegExMatch(button.name, "^(.+), rename (session|chat)$", &m)
-            current := m[1]
+        else if RegExMatch(button.name, "^(.+), rename (\w+)$", &m)
+            current := m[1], convo := (m[2] = "session" ? "code" : "chat") "|" m[1]
     }
     rows := [], seen := Map()
     for button in buttons {
@@ -694,7 +799,7 @@ SidebarRows(buttons) {
         seen[best] := true
         rows.Push({title: best, status: Trim(SubStr(name, 1, StrLen(name) - StrLen(best)))})
     }
-    return {rows: rows, current: current}
+    return {rows: rows, current: current, convo: convo}
 }
 
 ; Reads the chat from the bottom up, adding the parts of Claude's reply to found.parts (newest
@@ -779,6 +884,8 @@ CollectParts(kid, out, depth := 0) {
             if (name != "")
                 out.Push({type: "item", text: name})
         case UIA_TEXT, UIA_HYPERLINK:
+            if (kid.type = UIA_HYPERLINK && (url := LinkUrl(kid.el)) != "")   ; a link to a web page, for the row of links
+                out.Push({type: "link", text: name, url: url})
             kind := kid.kind
             if (kind = "heading") {
                 if !(StartsWith(name, "You said: ") || StartsWith(name, "Claude responded: "))
@@ -806,6 +913,19 @@ CollectParts(kid, out, depth := 0) {
     }
 }
 
+; Where a link goes, if it's a web page (its address, from the link's value), or "".
+LinkUrl(el) {
+    try {
+        if !(pattern := GetPattern(el, 10002, "{a94cd8b1-0844-4cd6-9d2d-640537ab39e9}"))   ; ValuePattern
+            return ""
+        ComCall(4, pattern, "ptr*", &bstr := 0)   ; CurrentValue
+        url := bstr ? StrGet(bstr, "UTF-16") : ""
+        DllCall("OleAut32\SysFreeString", "ptr", bstr)
+        return url ~= "i)^https?://[^\s`"<>]+$" ? url : ""
+    }
+    return ""
+}
+
 ; Words Claude's window shows for a moment where a reply is about to go, like "Sending…",
 ; "Waiting for Claude…" and "Thinking…". They aren't part of the reply (the status line under it
 ; says what Claude is doing), so they don't count as new words either.
@@ -828,7 +948,9 @@ PartsToMarkup(parts) {
     block := {lines: [], text: "", codeOnly: true}, bottom := 0
     gap := 6 * A_ScreenDPI / 96
     for part in parts {
-        if (part.type = "space") {
+        if (part.type = "link") {   ; (the links go in their own row; their words are runs too)
+            continue
+        } else if (part.type = "space") {
             if (block.text != "" && SubStr(block.text, -1) != " ")
                 block.text .= " "
         } else if (part.type = "run") {
@@ -1014,6 +1136,85 @@ LayOutExchange(ex, spreadMs := 0) {
         }
     }
     ex.parts := parts, ex.height := y, ex.stops := stops, ex.lineStops := lineStops, ex.anyStops := anyStops, ex.spans := spans
+    UpdateUnseen(ex)
+}
+
+; Claude's reply in an exchange (its part), or "" if there isn't one yet.
+ReplyPart(ex) {
+    for part in ex.parts
+        if (part.key = "claude")
+            return part
+    return ""
+}
+
+; Where the first of an exchange's reply words that you haven't seen is: the top of its paragraph,
+; from the top of the exchange (unseenAt), or "" once you've seen them all. Steps don't count.
+UpdateUnseen(ex) {
+    at := ""
+    if (part := ReplyPart(ex)) {
+        for i, t in part.tokens {
+            if (ex.seen.Has(i) || IsStepKind(t.kind))
+                continue
+            while (i > 1 && part.tokens[i - 1].block = t.block)   ; back to where its paragraph starts
+                i--
+            at := part.textY + part.tokens[i].y
+            break
+        }
+    }
+    if (at = "" && ex.unseenAt != "")   ; all seen now: the NEW line fades away
+        ex.lastUnseenAt := ex.unseenAt, ex.newGoneAt := Anim.lineGoneAt := A_TickCount
+    ex.unseenAt := at
+}
+
+; Counts all of an exchange's reply as seen (it was already there when it showed up).
+MarkAllSeen(ex) {
+    if !(part := ReplyPart(ex))
+        return
+    loop part.tokens.Length
+        ex.seen[A_Index] := true
+    ex.unseenAt := "", ex.lastUnseenAt := "", ex.sounded := part.tokens.Length   ; (and makes no typing sounds)
+}
+
+; Every 200 ms while the box shows: Claude's words that have been in full view for SEEN_MS count as
+; seen. Words that scrolled by too quickly, or showed up while the box was away, haven't been, and
+; the arrow at the top points up to them (see MoreAbove).
+CheckSeen() {
+    if !(Anim.shown && Anim.target && Anim.p >= 1)
+        return
+    now := A_TickCount, top := View.bottom - View.h, bottom := View.bottom, changed := false
+    loop History.Length + 1 {
+        ex := A_Index <= History.Length ? History[A_Index] : Current
+        part := ReplyPart(ex), showing := Map()
+        if (part && ex.y + part.textY < bottom && ex.y + ex.height > top) {
+            i := FirstVisible(part.tokens, top - ex.y - part.textY - 1)
+            while (i <= part.tokens.Length) {
+                t := part.tokens[i], ty := ex.y + part.textY + t.y
+                if (ty + Look.lineH > bottom + 1)
+                    break
+                if (ty >= top - 1 && now >= t.born + Look.motion.fade)
+                    showing[i] := true
+                i++
+            }
+        }
+        for i in showing {
+            if ex.seen.Has(i)
+                continue
+            if !ex.since.Has(i)
+                ex.since[i] := now
+            else if (now - ex.since[i] >= SEEN_MS)
+                ex.seen[i] := true, changed := true
+        }
+        gone := []
+        for i in ex.since
+            if (!showing.Has(i) || ex.seen.Has(i))
+                gone.Push(i)
+        for i in gone
+            ex.since.Delete(i)
+        if changed
+            UpdateUnseen(ex)
+    }
+    if changed
+        Kick()
 }
 
 ; The earliest of the stops (top to bottom) from which the rest of something height tall fits in
@@ -1243,12 +1444,14 @@ Motion() {
 ; ---- Showing and hiding -----------------------------------------------------------
 
 ; The box shows when there's something to show and it's recent, or someone is talking, or you're
-; pointing at it or scrolled back, or the settings are open, or there's a note.
+; pointing at it or scrolled back, or the settings are open, or there's a note; but not while you've
+; tucked it away (unless the settings are open).
 UpdateVisibility() {
     recent := !Settings.HideAfter || A_TickCount - LastChange < Settings.HideAfter * 1000
-    show := !Hidden && (Current.note != "" || Waiting || View.scrolled || Anim.panelTarget || HasConversation()
-        && (recent || Listening || Shown.live || Shown.streaming || Shown.thinking || Shown.work != "" || Anim.hoverTarget || SettingsGui)) ? 1 : 0
+    show := !Hidden && (SettingsGui || !Minimized && (Current.note != "" || Waiting || View.scrolled || Anim.panelTarget || HasConversation()
+        && (recent || Listening || Shown.live || Shown.streaming || Shown.thinking || Shown.work != "" || Anim.hoverTarget))) ? 1 : 0
     if (show != Anim.target) {
+        Anim.tucking := PeekWanted() || Anim.peek > 0   ; it shrinks into the tab at the side (or grows out of it)
         if (show && !Anim.p) {   ; coming back from hidden
             SnapView()
             ReplayWords()
@@ -1283,6 +1486,9 @@ WatchMouse() {
     CoordMode("Mouse", "Screen")
     MouseGetPos(&mx, &my)
     part := Anim.shown ? HitTest(mx - Anim.x, my - Anim.y) : ""
+    mouseY := part != "" ? my - Anim.y - Look.tabH : ""   ; from the top of the box
+    if (mouseY != Anim.mouseY && (mouseY = "" || Anim.mouseY = "" || Abs(mouseY - Anim.mouseY) > 2))
+        Anim.mouseY := mouseY, Kick()
     row := PanelRowAt(mx, my)   ; the list beside the box counts as part of it
     over := part != "" || OverPanel(mx, my) ? 1 : 0, hot := part = "box" ? "" : part
     if (row != Anim.panelHot)
@@ -1307,7 +1513,8 @@ WatchMouse() {
 ; What's at x, y on the box's window (from its top left, where the tabs are): "cog", "move" (the
 ; grip at the top), a corner for resizing ("resize-tl", "resize-tr", "resize-bl", "resize-br"),
 ; "scroll" (the scroll bar along the right), a tab that can be clicked ("tab-menu", "tab-chat" or
-; "tab-code"), "box" (anywhere else on it, the tab joined to it included), or "" (not on the box).
+; "tab-code"), "mini" (the – that tucks it away), one of the links at the bottom ("link-1" and so
+; on), "box" (anywhere else on it, the tab joined to it included), or "" (not on the box).
 HitTest(x, y) {
     w := Look.W, c := Look.cornerSize
     y -= Look.tabH, h := Anim.h - Look.tabH   ; from the top of the box, under the tab
@@ -1321,6 +1528,11 @@ HitTest(x, y) {
     }
     if ((x - Look.cogX) ** 2 + (y - Look.cogY) ** 2 <= (Look.cogR + 2) ** 2)
         return "cog"
+    if (Anim.hover > 0.5 && (x - Look.miniX) ** 2 + (y - Look.cogY) ** 2 <= (Look.cogR + 2) ** 2)
+        return "mini"
+    for i, spot in Anim.linkSpots
+        if (x >= spot.left && x < spot.right && y >= spot.top && y < spot.bottom)
+            return "link-" i
     if ((x < c || x >= w - c) && (y < c || y >= h - c))
         return "resize-" (y < c ? "t" : "b") (x < c ? "l" : "r")
     if (Abs(x - w / 2) <= Look.gripW / 2 + 6 * Look.s && y < Look.pad + 2 * Look.s)
@@ -1341,6 +1553,8 @@ BoxMouseDown(wParam, lParam, msg, hwnd) {
     global Drag
     if (PanelGui && hwnd = PanelGui.Hwnd)
         return PanelClick()
+    if (PeekGui && hwnd = PeekGui.Hwnd)
+        return OpenFromPeek()
     if !(BoxGui && hwnd = BoxGui.Hwnd)
         return
     ; What's under the mouse right now (it may have moved since the last look).
@@ -1349,6 +1563,14 @@ BoxMouseDown(wParam, lParam, msg, hwnd) {
     hot := HitTest(mx - Anim.x, my - Anim.y)
     if (hot = "cog") {
         SetTimer(OpenSettings, -1)
+        return 0
+    }
+    if (hot = "mini") {
+        Minimize()
+        return 0
+    }
+    if (InStr(hot, "link-") = 1) {   ; opens the page under the box (or closes it)
+        SetTimer(OpenPage.Bind(Anim.linkSpots[Integer(SubStr(hot, 6))].url), -1)
         return 0
     }
     if (InStr(hot, "tab-") = 1) {   ; ☰ opens or closes the list beside the box; a page's tab switches Claude to it
@@ -1375,7 +1597,7 @@ BoxMouseDown(wParam, lParam, msg, hwnd) {
         ; While you drag the scroll bar the box holds one size (settling onto whole lines once you
         ; let go), so the bar stays put under the mouse instead of moving as the box resizes.
         Drag.fixedH := Min(Settings.Lines * Look.lineH, View.total)
-        Drag.barTop := Look.pad, Drag.barH := Max(24 * Look.s, Drag.fixedH * Drag.fixedH / Max(1, View.total))
+        Drag.barTop := Anim.bar ? Anim.bar.top : Look.pad, Drag.barH := Max(24 * Look.s, Drag.fixedH * Drag.fixedH / Max(1, View.total))
         ; Grabbing the bar keeps it where you grabbed it; clicking beside it jumps it there.
         bar := Anim.bar, pointY := my - Anim.y - Look.tabH   ; from the top of the box
         Drag.grab := bar && pointY >= bar.y && pointY < bar.y + bar.h ? pointY - bar.y : Drag.barH / 2
@@ -1456,8 +1678,8 @@ ScrollToBar(y) {
 ; moving and resizing.
 BoxCursor(wParam, lParam, msg, hwnd) {
     static shapes := Map("cog", 32649, "scroll", 32649, "move", 32646, "resize-tl", 32642, "resize-br", 32642,
-        "resize-tr", 32643, "resize-bl", 32643, "tab-menu", 32649, "tab-chat", 32649, "tab-code", 32649)
-    if (PanelGui && wParam = PanelGui.Hwnd && Anim.panelHot) {   ; a hand over the list's rows
+        "resize-tr", 32643, "resize-bl", 32643, "tab-menu", 32649, "tab-chat", 32649, "tab-code", 32649, "mini", 32649)
+    if (PanelGui && wParam = PanelGui.Hwnd && Anim.panelHot || PeekGui && wParam = PeekGui.Hwnd || BoxGui && wParam = BoxGui.Hwnd && InStr(Anim.hot, "link-") = 1) {   ; a hand over the list's rows, the Claude tab and links
         DllCall("SetCursor", "ptr", DllCall("LoadCursor", "ptr", 0, "ptr", 32649, "ptr"))
         return true
     }
@@ -1568,25 +1790,20 @@ ToLiveIfAway() {
 }
 
 ; Claude's reply in the exchange showing, or "" if there isn't one yet.
-ClaudePart() {
-    for part in Current.parts
-        if (part.key = "claude")
-            return part
-    return ""
-}
+ClaudePart() => ReplyPart(Current)
 
-; Whether there's something above what the box is headed to show (t) that you haven't read, so
-; the arrow at the top says so: the start of Claude's newest reply, or new words in the exchange
-; before it (see UpdateCaptions). Scrolled back, the scroll bar says that instead, and once you've
-; scrolled up to them, you've seen them.
+; Whether some of Claude's words that you haven't seen yet (see CheckSeen) are above what the box
+; is headed to show (t), so the arrow at the top points up to them.
 MoreAbove(t) {
-    if (View.scrolled || Drag.resizing)
+    if Drag.resizing
         return false
-    if (History.Length && History[History.Length].unseen)
-        return true
-    if (Current.sawTop || !(part := ClaudePart()))
-        return false
-    return Current.y + part.textY < t.bottom - t.h - 1
+    top := t.bottom - t.h
+    loop History.Length + 1 {
+        ex := A_Index <= History.Length ? History[A_Index] : Current
+        if (ex.unseenAt != "" && ex.y + ex.unseenAt < top - 1)
+            return true
+    }
+    return false
 }
 
 ; ---- Following Claude's voice -------------------------------------------------------
@@ -1610,7 +1827,8 @@ FollowClaudesVoice() {
     }
     level := Voice.fake ? Voice.fake.Call() : ClaudeLoudness()
     if (level > 0.02)
-        Voice.loudAt := now   ; for when it's your turn to talk (see IsListening)
+        Voice.loudAt := now   ; for knowing whose turn it is (see VoiceState)
+    Voice.claudeLevel := Max(level, Voice.claudeLevel * Exp(-dt / 120))   ; for the blue light to pulse with
     ; How loud your mic is, for the listening light to swell as you talk.
     if (!Voice.micTried && !Voice.fake)
         try Voice.micMeter := OpenMicMeter()
@@ -1852,6 +2070,355 @@ DemoVoice() {
     }
 }
 
+; ---- Tucked away ----------------------------------------------------------------------
+
+; Whether the box goes into a tab with Claude's logo at the side of the screen when it hides: when
+; you tucked it away yourself, or when Tuck is on (see UpdateVisibility), and there's a conversation.
+PeekWanted() => !Hidden && (Minimized || Settings.Tuck) && HasConversation()
+
+; Tucks the box into its tab at the side of the screen (the – beside the cog), where it stays until
+; you click the tab. A page open under it goes down to the taskbar meanwhile.
+Minimize() {
+    global Minimized
+    Minimized := true, Anim.peekCount := 0
+    Anim.panelTarget := 0, Anim.hoverTarget := 0
+    ToLive()
+    UpdateVisibility()
+    if (Browser.hwnd && WinExist(Browser.hwnd))
+        try WinMinimize(Browser.hwnd)
+}
+
+; Brings the box back out of its tab (it grows out of it), and clears the count; and the page that
+; was open under it, if there was one.
+OpenFromPeek(*) {
+    global Minimized, LastChange
+    Minimized := false, Anim.peekCount := 0, Anim.peekHot := false
+    LastChange := A_TickCount   ; so it stays up a while
+    UpdateVisibility()
+    if (Browser.hwnd && WinExist(Browser.hwnd) && WinGetMinMax(Browser.hwnd) = -1)
+        try WinRestore(Browser.hwnd)
+    return 0
+}
+
+; Claude has something new (a finished reply, if finished) while the box is tucked away: the tab
+; wiggles (if TuckWiggle), and counts it (if TuckCount).
+Nudge(finished) {
+    if (Anim.target && !Minimized || !PeekWanted())
+        return
+    if finished
+        Anim.peekCount++
+    Anim.wiggleAt := Settings.TuckWiggle ? A_TickCount : 0
+    Kick()
+}
+
+; Where the Claude tab goes: at the edge of the screen on the box's side, level with the top of
+; the box. Also its middle once it's all the way out (cx, cy), for the box to shrink into.
+PeekSpot() {
+    MonitorGetWorkArea(MonitorGetPrimary(), &left, &top, &right, &bottom)
+    size := Look.peekSize, onRight := !InStr(Settings.Corner, "left"), out := size * 0.62
+    y := Anim.h ? Anim.y + Look.tabH : BoxPosition(Look.tabH + 2 * Look.pad).y + Look.tabH
+    y := Max(top, Min(y, bottom - size))
+    return {y: y, onRight: onRight, left: left, right: right, cx: onRight ? right - out / 2 : left + out / 2, cy: y + size / 2}
+}
+
+; The tab with Claude's logo that the box tucks into, peeking out from the edge of the screen: it
+; slides out further, and the logo grows a little, while you point at it, and clicking it brings the
+; box back. While the box is tucked away, finished replies are counted on it, and it wiggles when
+; Claude has something new. It's a window of its own, since it takes clicks.
+DrawPeek() {
+    global Canvas
+    static showing := false, spot := Buffer(16, 0)
+    if (Anim.peek <= 0) {
+        if showing
+            DllCall("ShowWindow", "ptr", PeekGui.Hwnd, "int", 0), showing := false, SetTimer(WatchPeek, 0)
+        return
+    }
+    s := Look.s, c := Look.colors, size := Look.peekSize, where := PeekSpot()
+    full := size * (0.74 + 0.12 * Anim.peekHover)   ; how far it's out, all the way
+    out := full * (1 - (1 - Anim.peek) ** 3), w := Max(1, Ceil(out))
+    ; Its window is only the part that's out, so it never shows on a screen next to this one.
+    x := where.onRight ? where.right - w : where.left, y := Round(where.y)
+    Anim.peekX := x, Anim.peekY := y, Anim.peekW := w
+    saved := Canvas, Canvas := PeekCanvas, g := Canvas.g
+    DllCall("gdiplus\GdipGraphicsClear", "ptr", g, "uint", 0)
+    DllCall("gdiplus\GdipResetWorldTransform", "ptr", g)
+    left := where.onRight ? w - out : out - size   ; where the tab's own left edge is
+    DllCall("gdiplus\GdipTranslateWorldTransform", "ptr", g, "float", left, "float", 0, "int", 0)
+    RoundedBox(size, ARGB(Max(0.92, Settings.Background / 100), c.bg), ARGB(0.22, c.text), "", size, 16 * s)
+    DllCall("gdiplus\GdipResetWorldTransform", "ptr", g)
+    ; Claude's logo, in the middle of the part that's out, wiggling for a moment when there's
+    ; something new.
+    cx := where.onRight ? left + full / 2 + s : left + size - full / 2 - s, cy := size / 2
+    logoW := 26 * s * (1 + 0.15 * Anim.peekHover), age := A_TickCount - Anim.wiggleAt
+    turn := Anim.wiggleAt && age < 900 ? 14 * Sin(age / 1000 * 6.2832 * 4.5) * (1 - age / 900) : 0
+    DllCall("gdiplus\GdipTranslateWorldTransform", "ptr", g, "float", cx, "float", cy, "int", 0)
+    DllCall("gdiplus\GdipRotateWorldTransform", "ptr", g, "float", turn, "int", 0)
+    if (logo := ClaudeLogo())
+        DllCall("gdiplus\GdipDrawImageRect", "ptr", g, "ptr", logo, "float", -logoW / 2, "float", -logoW / 2, "float", logoW, "float", logoW)
+    else
+        DrawSpark(logoW / 2)
+    DllCall("gdiplus\GdipResetWorldTransform", "ptr", g)
+    ; How many replies came in while it was tucked away.
+    if (Settings.TuckCount && Anim.peekCount) {
+        r := 8 * s, bx := cx + (where.onRight ? -1 : 1) * logoW * 0.5, by := cy - logoW * 0.5
+        FillCircle(bx, by, r, ARGB(1, 0xE5484D))
+        NumPut("float", bx - r, "float", by - r, "float", 2 * r, "float", 2 * r, spot)
+        DllCall("gdiplus\GdipSetSolidFillColor", "ptr", Brush, "uint", 0xFFFFFFFF)
+        DllCall("gdiplus\GdipDrawString", "ptr", g, "wstr", Anim.peekCount > 9 ? "9+" : Anim.peekCount "", "int", -1, "ptr", Look.labelFont.font,
+            "ptr", spot, "ptr", CenterFormat, "ptr", Brush)
+    }
+    Canvas := saved
+    pt := Buffer(8), box := Buffer(8), origin := Buffer(8, 0)
+    NumPut("int", x, "int", y, pt), NumPut("int", w, "int", size, box)
+    DllCall("UpdateLayeredWindow", "ptr", PeekGui.Hwnd, "ptr", 0, "ptr", pt, "ptr", box, "ptr", PeekCanvas.hdc,
+        "ptr", origin, "uint", 0, "uint*", Round(255 * Min(1, Anim.peek * 1.5)) << 16 | 1 << 24, "uint", 2)
+    if !showing
+        DllCall("ShowWindow", "ptr", PeekGui.Hwnd, "int", 8), showing := true, SetTimer(WatchPeek, 50)
+}
+
+; While the Claude tab shows: notices when you point at it.
+WatchPeek() {
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mx, &my)
+    over := mx >= Anim.peekX && mx < Anim.peekX + Anim.peekW && my >= Anim.peekY && my < Anim.peekY + Look.peekSize
+    if (over != Anim.peekHot)
+        Anim.peekHot := over, Kick()
+}
+
+; Claude's own app icon, read from Claude's app (while it's running) as a picture with its
+; see-through corners kept, or "" if it can't be read. Tried again now and then until it can.
+ClaudeLogo() {
+    static logo := "", triedAt := -60000, bits := ""
+    if (logo || A_TickCount - triedAt < 30000)
+        return logo
+    triedAt := A_TickCount
+    try {
+        if !DllCall("PrivateExtractIconsW", "str", ProcessGetPath("claude.exe"), "int", 0, "int", 128, "int", 128, "ptr*", &icon := 0, "ptr", 0, "uint", 1, "uint", 0) || !icon
+            return logo
+        info := Buffer(32, 0)   ; ICONINFO
+        DllCall("GetIconInfo", "ptr", icon, "ptr", info)
+        color := NumGet(info, 24, "ptr"), mask := NumGet(info, 16, "ptr")
+        bm := Buffer(32, 0)
+        DllCall("GetObject", "ptr", color, "int", 32, "ptr", bm)
+        w := NumGet(bm, 4, "int"), h := NumGet(bm, 8, "int")
+        header := Buffer(40, 0)   ; BITMAPINFOHEADER, rows top to bottom, 32 bits a pixel
+        NumPut("uint", 40, "int", w, "int", -h, "ushort", 1, "ushort", 32, header)
+        bits := Buffer(w * h * 4, 0), hdc := DllCall("GetDC", "ptr", 0, "ptr")
+        DllCall("GetDIBits", "ptr", hdc, "ptr", color, "uint", 0, "uint", h, "ptr", bits, "ptr", header, "uint", 0)
+        DllCall("ReleaseDC", "ptr", 0, "ptr", hdc)
+        DllCall("gdiplus\GdipCreateBitmapFromScan0", "int", w, "int", h, "int", w * 4, "int", 0x26200A, "ptr", bits, "ptr*", &picture := 0)
+        logo := picture
+        DllCall("DeleteObject", "ptr", color), DllCall("DeleteObject", "ptr", mask), DllCall("DestroyIcon", "ptr", icon)
+    }
+    return logo
+}
+
+; A stand-in for Claude's logo (a white spark on an orange tile), r from its middle to its edge,
+; drawn around (0, 0).
+DrawSpark(r) {
+    FillRoundRect(-r, -r, 2 * r, 2 * r, r * 0.45, ARGB(1, 0xD97757))
+    points := Buffer(16)
+    loop 11 {
+        turn := (A_Index - 1) * 6.2832 / 11 + 0.3, long := r * (0.52 + 0.14 * Mod(A_Index * 7, 3) / 2)
+        NumPut("float", 0, "float", 0, "float", Cos(turn) * long, "float", Sin(turn) * long, points)
+        DrawLines(points, 2, r * 0.16, 0xFFFFFFFF)
+    }
+}
+
+; ---- Links under the box ------------------------------------------------------------
+
+; The links in Claude's newest reply, as pills along the bottom of the box, each saying where it
+; goes ("youtube.com"). Click one to open the page in a browser window attached under the box;
+; while it's open, its pill turns blue with a ✕, and clicking it again closes the page.
+DrawLinks(top, rowH) {
+    Anim.linkSpots := []
+    if (rowH < 2 || !Current.links.Length)
+        return
+    s := Look.s, c := Look.colors, h := Look.labelH + 2 * s, x := Look.pad, y := top + (rowH - h) / 2 - 2 * s
+    a := Anim.links, iconW := Look.icons.Has("link") ? Look.icons["link"].w + 5 * s : 0
+    sites := Map()
+    for link in Current.links
+        site := LinkSite(link.url), sites[site] := sites.Has(site) ? sites[site] + 1 : 1
+    for i, link in Current.links {
+        open := Browser.url = link.url, color := open ? c.you : c.claude, site := LinkSite(link.url)
+        if (sites[site] > 1 && RegExMatch(link.url, "i)^https?://[^/]+/([^/?#]+)", &m))
+            site .= "/" (StrLen(m[1]) > 16 ? SubStr(m[1], 1, 15) "…" : m[1])
+        text := (open ? "✕  " : "") site
+        w := 14 * s + iconW + TextWidth(text, Look.labelFont)
+        if (x + w > Look.pad + Look.inner)
+            break
+        FillRoundRect(x, y, w, h, h / 2, ARGB(a * (Anim.hot = "link-" i ? 0.32 : 0.16), color))
+        if iconW
+            DrawWord(Look.icons["link"].glyph, Look.iconFont, x + 7 * s, y + (h - Look.labelH) / 2 + Look.icons["link"].dy, a, color, 0)
+        DrawWord(text, Look.labelFont, x + 7 * s + iconW, y + (h - Look.labelH) / 2 + Look.labelDy, a, color, 0)
+        Anim.linkSpots.Push({left: x, right: x + w, top: y, bottom: y + h, url: link.url})
+        x += w + 6 * s
+    }
+}
+
+; Where a link goes, as "youtube.com".
+LinkSite(url) => RegExReplace(url, "i)^https?://(www\.)?([^/:?#]+).*$", "$2")
+
+; Opens a web page from Claude's reply in a bare browser window (Edge as an app: no tabs or address
+; bar) attached under the box and as wide as it, or above it if the box is at the bottom of the
+; screen. Opening the page that's open again closes it. Without Edge, the page opens in your usual
+; browser instead. Only web pages (http and https) open.
+OpenPage(url) {
+    global Browser
+    if !(url ~= "i)^https?://[^\s`"<>]+$")
+        return
+    if (Browser.hwnd && WinExist(Browser.hwnd)) {
+        same := Browser.url = url
+        WinClose(Browser.hwnd)
+        Browser := {hwnd: 0, url: "", movedAt: 0}
+        Kick()
+        if same
+            return
+    }
+    edge := A_ProgramFiles " (x86)\Microsoft\Edge\Application\msedge.exe"
+    if !FileExist(edge)
+        edge := A_ProgramFiles "\Microsoft\Edge\Application\msedge.exe"
+    if !FileExist(edge) {
+        Run(url)
+        return
+    }
+    spot := BrowserSpot(), before := Map()
+    for hwnd in WinGetList("ahk_exe msedge.exe")
+        before[hwnd] := true
+    Run('"' edge '" --app="' url '" --new-window --window-size=' spot.w ',' spot.h ' --window-position=' spot.x ',' spot.y)
+    Browser := {hwnd: 0, url: url, movedAt: A_TickCount}
+    Kick()
+    deadline := A_TickCount + 8000
+    while (A_TickCount < deadline && Browser.url = url) {   ; its window: the new one Edge opens
+        Sleep 150
+        for hwnd in WinGetList("ahk_exe msedge.exe ahk_class Chrome_WidgetWin_1")
+            if (!before.Has(hwnd) && DllCall("IsWindowVisible", "ptr", hwnd) && WinGetTitle(hwnd) != "") {
+                Browser.hwnd := hwnd
+                MoveBrowser()
+                return
+            }
+    }
+}
+
+; Where the page opens: under the box (or above it, if the box is at the bottom of the screen), as
+; wide as it and half the screen tall.
+BrowserSpot() {
+    MonitorGetWorkArea(MonitorGetPrimary(), &left, &top, &right, &bottom)
+    gap := Round(8 * Look.s), w := Look.W, h := Round((bottom - top) * 0.5)
+    y := InStr(Settings.Corner, "bottom") ? Anim.y - h - gap : Anim.y + Anim.h + gap
+    return {x: Anim.x, y: Max(top, Min(y, bottom - h)), w: w, h: h}
+}
+
+; Keeps the page attached to the box as the box moves and grows (or lets go of it once it's closed).
+MoveBrowser() {
+    global Browser
+    Browser.movedAt := A_TickCount
+    if !WinExist(Browser.hwnd) {
+        Browser := {hwnd: 0, url: "", movedAt: 0}
+        Kick()
+        return
+    }
+    if (WinGetMinMax(Browser.hwnd) = -1)   ; (down on the taskbar)
+        return
+    spot := BrowserSpot()
+    WinGetPos(&x, &y, &w, &h, Browser.hwnd)
+    if (Abs(x - spot.x) > 3 || Abs(y - spot.y) > 3 || Abs(w - spot.w) > 3)
+        WinMove(spot.x, spot.y, spot.w, spot.h, Browser.hwnd)
+}
+
+; ---- Typing sounds ----------------------------------------------------------------
+
+; Claude's words appearing make little sounds, if you picked some (TypingSound): one for each word
+; as it starts to fade in, a moment apart, like the talking in Animal Crossing or Undertale, or
+; soft clicks. Not in voice mode, where Claude talks out loud, nor while the box is away.
+TypingSounds(now) {
+    static nextAt := 0
+    if (!Anim.shown || VoiceMode || now < nextAt || !(part := ClaudePart()))
+        return
+    tokens := part.tokens, i := Current.sounded + 1
+    while (i <= tokens.Length && !(tokens[i].text ~= "[\p{L}\p{N}]"))   ; bullets and such make no sound
+        i++
+    if (i > tokens.Length || now < tokens[i].born)
+        return
+    ; Far behind (words came faster than sounds can keep up): skip ahead to the words appearing now.
+    while (i < tokens.Length && now - tokens[i + 1].born > 400)
+        i++
+    Current.sounded := i
+    sounds := Blips(Settings.TypingSound), blip := sounds[Mod(Ord(tokens[i].text) + i, sounds.Length) + 1]
+    DllCall("winmm\PlaySoundW", "ptr", blip, "ptr", 0, "uint", 0x0007)   ; SND_MEMORY | SND_ASYNC | SND_NODEFAULT
+    nextAt := now + (Settings.TypingSound = "Animal Crossing" ? 70 : Settings.TypingSound = "Undertale" ? 55 : 40)
+}
+
+; The little sounds for one kind (see TypingSounds): a few each, so they don't all sound the same.
+; They're made the first time they're needed, as short recordings kept in memory.
+Blips(kind) {
+    static made := Map()
+    if made.Has(kind)
+        return made[kind]
+    rate := 22050, list := []
+    switch kind {
+        case "Soft clicks":   ; a tiny tick of noise, dying away fast
+            loop 5 {
+                wave := [], last := 0.0, n := Round(rate * 0.012)
+                loop n {
+                    last := last * 0.55 + (Random() * 2 - 1) * 0.45   ; noise, softened
+                    wave.Push(last * Exp(-(A_Index / rate) / 0.0022) * 0.5)
+                }
+                list.Push(Recording(wave, rate))
+            }
+        case "Undertale":   ; a short square-wave beep, like its text boxes
+            for pitch in [520, 490, 550] {
+                wave := [], n := Round(rate * 0.034)
+                loop n {
+                    t := A_Index / rate
+                    wave.Push((Mod(t * pitch, 1) < 0.5 ? 0.22 : -0.22) * Min(1, (n - A_Index) / (rate * 0.006)))
+                }
+                list.Push(Recording(wave, rate))
+            }
+        default:   ; Animal Crossing: a quick sung syllable on a vowel, each at its own pitch, sliding down
+            vowels := [[730, 1090], [530, 1840], [300, 2250], [570, 840], [440, 1020]]   ; a, e, i, o, u
+            for pitch in [240, 280, 320, 360, 300, 420, 260, 380] {
+                vowel := vowels[Mod(A_Index, vowels.Length) + 1], wave := [], n := Round(rate * 0.06), peak := 0.001
+                loop n {
+                    t := A_Index / rate, f0 := pitch * (1.18 - 0.18 * A_Index / n), v := 0.0
+                    loop 7 {   ; the voice's harmonics, loudest near the vowel's two formants
+                        f := f0 * A_Index
+                        v += Sin(6.2832 * f * t) * (Exp(-((f - vowel[1]) / 260) ** 2) + 0.6 * Exp(-((f - vowel[2]) / 380) ** 2) + 0.12) / A_Index ** 0.5
+                    }
+                    v *= Min(1, t / 0.006) * Exp(-t / 0.035)
+                    wave.Push(v), peak := Max(peak, Abs(v))
+                }
+                loop n
+                    wave[A_Index] *= 0.35 / peak
+                list.Push(Recording(wave, rate))
+            }
+    }
+    return made[kind] := list
+}
+
+; A sound (wave, from -1 to 1, rate samples a second) as a WAV recording in memory, for PlaySound.
+Recording(wave, rate) {
+    n := wave.Length, wav := Buffer(44 + 2 * n)
+    NumPut("uint", 0x46464952, "uint", 36 + 2 * n, "uint", 0x45564157, "uint", 0x20746D66, "uint", 16,   ; "RIFF", size, "WAVE", "fmt "
+        "ushort", 1, "ushort", 1, "uint", rate, "uint", rate * 2, "ushort", 2, "ushort", 16,             ; PCM, mono, 16-bit
+        "uint", 0x61746164, "uint", 2 * n, wav)                                                          ; "data", size
+    loop n
+        NumPut("short", Round(Max(-1, Min(1, wave[A_Index])) * 32000), wav, 42 + 2 * A_Index)
+    return wav
+}
+
+; Plays the sounds you just picked, on the words showing.
+PreviewTyping() {
+    ReplayWords()
+    if (part := ClaudePart()) {
+        Current.sounded := 0
+        for i, t in part.tokens
+            if (t.born < A_TickCount)   ; (not flowing in again: it's above what shows)
+                Current.sounded := i
+    }
+    Kick()
+}
+
 ; ---- Animation ------------------------------------------------------------------
 
 ; Starts the animation if it isn't running, and has the box drawn again (something changed). The
@@ -1877,13 +2444,7 @@ Frame() {
     glideMs := !smooth ? 0 : Drag.mode = "scroll" ? 40 : View.scrolled ? SmoothMs() : easeMs * 2
     speed := View.bottomSpeed, View.bottom := Spring(View.bottom, t.bottom, &speed, dt, glideMs), View.bottomSpeed := speed
     speed := View.hSpeed, View.h := Spring(View.h, t.h, &speed, dt, glideMs), View.hSpeed := speed
-    ; The arrow saying there's more of Claude's reply above comes and goes softly. Once you've
-    ; scrolled up to the start of the reply, it stays away.
-    if (View.scrolled && !Current.sawTop && (part := ClaudePart()) && Current.y + part.textY >= View.bottom - View.h - 1)
-        Current.sawTop := true
-    ; New words in the exchange before count as seen once you've scrolled up to them (or it all fits).
-    if (History.Length && (prev := History[History.Length]).unseen && View.bottom - View.h < prev.y + (View.scrolled ? prev.height : 1))
-        prev.unseen := false
+    ; The arrow saying there are words above you haven't seen comes and goes softly.
     above := MoreAbove(t) ? 1 : 0
     if (above && !Anim.aboveAt)
         Anim.aboveAt := now
@@ -1898,16 +2459,43 @@ Frame() {
         speed := Anim.tabSpeedL, Anim.tabLeft := Spring(Anim.tabLeft, slot.left, &speed, dt, 180), Anim.tabSpeedL := speed
         speed := Anim.tabSpeedR, Anim.tabRight := Spring(Anim.tabRight, slot.right, &speed, dt, 180), Anim.tabSpeedR := speed
     }
-    ; The list beside the box opens and closes softly, and while voice mode is listening for you, a
-    ; blue light breathes at the bottom of the box.
+    ; The list beside the box opens and closes softly, and so does voice mode's blue light.
     Anim.panel := Approach(Anim.panel, Anim.panelTarget, smooth ? dt / 180 : 1)
-    listening := IsListening() ? 1 : 0
+    listening := VoiceState() != "" ? 1 : 0
     Anim.listen := Approach(Anim.listen, listening, smooth ? dt / 400 : 1)
+    ; While you scroll back, a strip at the top holds the name of whose words you're reading (see
+    ; DrawStickyLabel), and the messages' times show until TIMES_MS after you stop.
+    stickyTo := View.scrolled ? 1 : 0, timesTo := View.scrolled && (now - ScrollAt < TIMES_MS || Drag.mode = "scroll") ? 1 : 0
+    Anim.sticky := Approach(Anim.sticky, stickyTo, smooth ? dt / 200 : 1)
+    Anim.times := Approach(Anim.times, timesTo, smooth ? dt / (timesTo ? 200 : 600) : 1)
+    ; Tucked away, the Claude tab slides out from the side of the screen once the box has shrunk
+    ; into it, and back in as the box comes out; pointing at it slides it out a little more. The row
+    ; of links at the bottom of the box opens when the reply has links.
+    peekTo := Anim.target = 0 && Anim.p < 0.35 && PeekWanted() ? 1 : 0, hoverTo := Anim.peekHot ? 1 : 0
+    Anim.peek := Approach(Anim.peek, peekTo, smooth ? dt / 260 : 1)
+    Anim.peekHover := Approach(Anim.peekHover, hoverTo, smooth ? dt / 150 : 1)
+    linksTo := Current.links.Length && !Current.sample ? 1 : 0
+    Anim.links := Approach(Anim.links, linksTo, smooth ? dt / 200 : 1)
     moving := Anim.p != Anim.target || Anim.hover != Anim.hoverTarget || View.h != t.h || View.bottom != t.bottom
         || (smooth && now < Current.fadeUntil) || (Current.newAt && now - Current.newAt < NEW_BADGE_MS)
         || (Anim.liveAt && now - Anim.liveAt < LIVE_BADGE_MS)
         || Anim.above != above || (Anim.above && now - Anim.aboveAt < 3300) || slot && (Anim.tabLeft != slot.left || Anim.tabRight != slot.right)
-        || Anim.panel != Anim.panelTarget || Anim.listen != listening
+        || Anim.panel != Anim.panelTarget || Anim.listen != listening || smooth && now - Anim.switchAt < 360
+        || Anim.sticky != stickyTo || Anim.times != timesTo || now - Anim.lineGoneAt < 900
+        || Anim.peek != peekTo || Anim.peekHover != hoverTo || now - Anim.wiggleAt < 900 || Anim.links != linksTo
+    ; With Float on, the box drifts gently (see Draw), leaning a little toward the mouse when it's
+    ; near, but not while you're pointing at it or dragging it.
+    floating := Settings.Float && smooth && Anim.target && !Drag.mode
+    if floating {
+        CoordMode("Mouse", "Screen")
+        MouseGetPos(&mx, &my)
+        dx := mx - (Anim.x + Look.W / 2), dy := my - (Anim.y + Anim.h / 2), dist := Sqrt(dx * dx + dy * dy)
+        near := Anim.hoverTarget || !dist ? 0 : Max(0, 1 - dist / 700) * 6 * Look.s / dist
+        speed := Anim.leanSX, Anim.leanX := Spring(Anim.leanX, dx * near, &speed, dt, 500), Anim.leanSX := speed
+        speed := Anim.leanSY, Anim.leanY := Spring(Anim.leanY, dy * near, &speed, dt, 500), Anim.leanSY := speed
+    }
+    if (Settings.TypingSound != "Off")
+        TypingSounds(now)
     ; The glow following Claude's voice, which is drawn up to 60 times a second while it moves.
     following := FollowFrame(now, dt, smooth)
     ; "Listening", "Thinking" and "Responding" pulse gently, which only needs drawing now and then
@@ -1915,9 +2503,10 @@ Frame() {
     pulsing := Anim.target && (Current.note != "" || Current.youStatus != "" || Current.claudeStatus != "" || Current.work != "" || Current.queued != ""
         || Anim.listen > 0 || Anim.panel > 0)
     ; With nothing left to do, the last frame is drawn and the animation stops, unless Claude is
-    ; talking, when the glow can move on at any moment.
-    idle := !(moving || following || pulsing || Voice.on)
-    if (moving || idle || Anim.dirty || following && now - Anim.lastDraw >= 16 || pulsing && now - Anim.lastDraw >= (Current.thinking || Anim.listen > 0 ? 40 : 100)) {
+    ; talking, when the glow can move on at any moment, or the times are waiting to fade.
+    idle := !(moving || following || pulsing || floating || Voice.on || View.scrolled && Anim.times > 0)
+    if (moving || idle || Anim.dirty || following && now - Anim.lastDraw >= 16 || floating && now - Anim.lastDraw >= 33
+        || pulsing && now - Anim.lastDraw >= (Current.thinking || Anim.listen > 0 ? 40 : 100)) {
         Anim.dirty := false
         try Draw()
     }
@@ -1943,10 +2532,18 @@ FollowFrame(now, dt, smooth) {
     return Voice.shown != bright || Voice.glow != glow || Voice.pos != target || Voice.pos != Voice.word
 }
 
-; Whether voice mode is listening for you: its mic is on, and Claude isn't talking, thinking, or
-; writing a reply.
-IsListening() => VoiceMode && VoiceMicLive && !Voice.on && A_TickCount - Voice.loudAt > 700 && !Current.thinking
-    && Current.claudeStatus = ""
+; What voice mode is doing: "speaking" (Claude is talking), "thinking" (about, or writing, its
+; reply), "listening" (for you: its mic is on and it's your turn), or "" (voice mode is off, or its
+; mic is muted).
+VoiceState() {
+    if !VoiceMode
+        return ""
+    if (A_TickCount - Voice.loudAt < 600)
+        return "speaking"
+    if (Current.thinking || Current.claudeStatus != "")
+        return "thinking"
+    return VoiceMicLive ? "listening" : ""
+}
 
 Approach(value, target, step) => value < target ? Min(target, value + step) : Max(target, value - step)
 
@@ -1976,7 +2573,7 @@ SmoothMs() => 60 * (500 / 60) ** ((Settings.ScrollSmooth - 1) / 9)
 
 ; Starts GDI+, the part of Windows that draws smooth text and shapes, and makes the box's window.
 StartDrawing() {
-    global Brush, TextFormat, CenterFormat, Measurer, BoxGui, PanelGui
+    global Brush, TextFormat, CenterFormat, Measurer, BoxGui, PanelGui, PeekGui
     DllCall("LoadLibrary", "str", "gdiplus", "ptr")
     input := Buffer(24, 0)
     NumPut("uint", 1, input)   ; GDI+ version 1
@@ -1996,12 +2593,14 @@ StartDrawing() {
     BoxGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +E0x80000 +E0x20 +E0x08000000")
     ; The list beside the box of Claude's sessions or chats (see DrawPanel), which takes clicks.
     PanelGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +E0x80000 +E0x08000000")
+    ; The tab with Claude's logo the box tucks into (see DrawPeek), which takes clicks too.
+    PeekGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +E0x80000 +E0x08000000")
     ApplySettings()
 }
 
 ; Works out sizes, fonts and colors from Settings, and lays the words out again to match.
 ApplySettings() {
-    global Look, Canvas, PanelCanvas
+    global Look, Canvas, PanelCanvas, PeekCanvas
     Critical
     s := A_ScreenDPI / 96
     key := Settings.Font "|" Settings.FontSize   ; the fonts only change with these
@@ -2048,7 +2647,7 @@ ApplySettings() {
         if Look.iconFont {
             icon := Ink(Look.iconFont, Look.messageGlyph)
             Look.iconDy := (Look.labelH - icon.h) / 2 - icon.top
-            for name, glyph in Map("chat", Chr(0xE8BD), "code", Chr(0xE943), "mic", Chr(0xE720), "menu", Chr(0xE700)) {
+            for name, glyph in Map("chat", Chr(0xE8BD), "code", Chr(0xE943), "mic", Chr(0xE720), "menu", Chr(0xE700), "link", Chr(0xE71B)) {
                 icon := Ink(Look.iconFont, glyph)
                 Look.icons[name] := {glyph: glyph, dy: (Look.labelH - icon.h) / 2 - icon.top, w: TextWidth(glyph, Look.iconFont)}
             }
@@ -2067,17 +2666,25 @@ ApplySettings() {
         ; The list beside the box: its width, the height of its heading and of each row, and its padding.
         Look.panelW := Round(260 * s), Look.panelHead := Round(Look.labelH + 12 * s)
         Look.rowH := Round(Look.smallH + 12 * s), Look.panelPad := Round(8 * s)
+        ; The Claude tab the box tucks into, and the row of links at the bottom of the box.
+        Look.peekSize := Round(56 * s), Look.linkRowH := Round(Look.labelH + 12 * s)
     }
     ; The width can change on its own (dragging a corner), without the fonts changing.
     Look.W := Round(Settings.Width * s), Look.inner := Look.W - 2 * Look.pad
     Look.cogR := 13 * s, Look.cogX := Look.W - Look.pad - 7 * s, Look.cogY := Look.pad + Look.labelH / 2
+    Look.miniX := Look.cogX - 2 * Look.cogR - 4 * s   ; the – that tucks the box away, beside the cog
     Look.colors := Colors()
     Look.motion := Motion()
-    tallest := Look.tabH + 2 * Look.pad + Settings.Lines * Look.lineH + Round(4 * s)   ; the tab, and the box at its tallest
+    tallest := Look.tabH + 2 * Look.pad + Look.labelH + Look.linkRowH + Settings.Lines * Look.lineH + Round(4 * s)   ; the tab, and the box at its tallest (with the strip for a name and the row of links)
     if (!Canvas || Canvas.w != Look.W || Canvas.h != tallest) {
         if Canvas
             FreeCanvas(Canvas)
         Canvas := MakeCanvas(Look.W, tallest)
+    }
+    if (!PeekCanvas || PeekCanvas.w != Look.peekSize) {
+        if PeekCanvas
+            FreeCanvas(PeekCanvas)
+        PeekCanvas := MakeCanvas(Look.peekSize, Look.peekSize)
     }
     panelTallest := Look.panelHead + (PANEL_ROWS + 1) * Look.rowH + Look.panelPad
     if (!PanelCanvas || PanelCanvas.w != Look.panelW || PanelCanvas.h != panelTallest) {
@@ -2094,13 +2701,33 @@ ApplySettings() {
     Kick()
 }
 
-; The colors for the box: dark, light, or whichever Windows is using for apps.
+; The colors for the box: its background, the words, your name, Claude's and code's, for the theme
+; picked (with "Match Windows", dark or light as Windows is for apps; with "Custom", yours).
 Colors() {
-    if (Settings.Theme = "Light" || (Settings.Theme = "Match Windows" && WindowsUsesLight()))
-        return {light: true, bg: 0xFAF9F5, text: 0x1F1E1D, you: 0x2F6FD8, claude: 0xC15F3C, code: 0x9A3F22,
-            edge: 0x000000, shadow: 0xFFFFFF}
-    return {light: false, bg: 0x1F1E1D, text: 0xF5F4EE, you: 0x8AB4F8, claude: 0xE08A6D, code: 0xF2C4A8,
-        edge: 0xFFFFFF, shadow: 0x000000}
+    theme := Settings.Theme = "Match Windows" ? (WindowsUsesLight() ? "Light" : "Dark") : Settings.Theme
+    switch theme {
+        case "Light":    return Palette(0xFAF9F5, 0x1F1E1D, 0x2F6FD8, 0xC15F3C, 0x9A3F22)
+        case "Midnight": return Palette(0x0F1629, 0xE3E8F4, 0x7AA7FF, 0xF2A07B, 0xFFD3A8)
+        case "Ocean":    return Palette(0x0C2A33, 0xE4F3F3, 0x6FD3F2, 0xFFB27A, 0xFCE3A0)
+        case "Forest":   return Palette(0x16241B, 0xE9F1E6, 0x8FC4FF, 0xF0A77A, 0xD7EFA3)
+        case "Sunset":   return Palette(0x2B1624, 0xFCEFF4, 0x9DB8FF, 0xFF9F7A, 0xFFD4A6)
+        case "Paper":    return Palette(0xF3EDE2, 0x2B2521, 0x2D64C8, 0xB65532, 0x8E3B1F)
+        case "Rosé":     return Palette(0xFBEFF1, 0x3A2328, 0x3F6BD6, 0xC8506A, 0x9A3350)
+        case "Mono":     return Palette(0x161616, 0xEDEDED, 0xBDBDBD, 0xFFFFFF, 0xD0D0D0)
+        case "Custom":
+            c := StrSplit(Settings.CustomColors, ",")
+            return Palette(Integer("0x" c[1]), Integer("0x" c[2]), Integer("0x" c[3]), Integer("0x" c[4]), Integer("0x" c[5]))
+    }
+    return Palette(0x1F1E1D, 0xF5F4EE, 0x8AB4F8, 0xE08A6D, 0xF2C4A8)   ; Dark
+}
+
+; A set of colors from its background, words, your name, Claude's name and code. Whether it's a
+; light one goes by how bright the background is; the faint edge and the shadow behind words on a
+; see-through box go the other way.
+Palette(bg, text, you, claude, code) {
+    light := (bg >> 16 & 0xFF) * 0.299 + (bg >> 8 & 0xFF) * 0.587 + (bg & 0xFF) * 0.114 > 140
+    return {light: light, bg: bg, text: text, you: you, claude: claude, code: code,
+        edge: light ? 0x000000 : 0xFFFFFF, shadow: light ? 0xFFFFFF : 0x000000}
 }
 
 WindowsUsesLight() {
@@ -2119,17 +2746,33 @@ CheckWindowsColors() {
 ; Draws the box on Canvas and puts it on screen.
 Draw() {
     g := Canvas.g, c := Look.colors
-    ; The box, sized to what it shows, and its window, which has room on top for the tab.
-    hb := Min(Canvas.h - Look.tabH, Round(2 * Look.pad + View.h)), h := hb + Look.tabH
+    ; The box, sized to what it shows (and, while you scroll back, the strip at its top that holds a
+    ; name), and its window, which has room on top for the tab.
+    stripH := Round(Anim.sticky * Look.labelH), linksH := Round(Anim.links * Look.linkRowH)
+    hb := Min(Canvas.h - Look.tabH, Round(2 * Look.pad + View.h + stripH + linksH)), h := hb + Look.tabH
     enter := Entrance()
     pos := BoxPosition(h)
     pos.x += Round(InStr(Settings.Corner, "left") ? -enter.shift : enter.shift)
+    ; With Float on, it drifts gently, and leans toward the mouse: the window moves by whole pixels,
+    ; and what's in it by the rest, so the drift is smooth.
+    fx := fy := 0
+    if (Settings.Float && Settings.Animate && !Drag.mode) {
+        t := A_TickCount / 1000
+        fx := Sin(t * 0.8) * 2.5 * Look.s + Anim.leanX, fy := Sin(t * 1.1 + 1) * 2 * Look.s + Anim.leanY
+        pos.x += Floor(fx), pos.y += Floor(fy), fx -= Floor(fx), fy -= Floor(fy)
+    }
     Anim.x := pos.x, Anim.y := pos.y, Anim.h := h, Anim.lastDraw := A_TickCount
     DllCall("gdiplus\GdipGraphicsClear", "ptr", g, "uint", 0)
     ; While popping in or out, everything is drawn a little smaller, growing from the box's corner.
     DllCall("gdiplus\GdipResetWorldTransform", "ptr", g)
+    if (fx || fy)
+        DllCall("gdiplus\GdipTranslateWorldTransform", "ptr", g, "float", fx, "float", fy, "int", 1)
     if (enter.scale != 1) {
         ox := InStr(Settings.Corner, "left") ? 0 : Look.W, oy := InStr(Settings.Corner, "bottom") ? h : 0
+        if enter.HasOwnProp("toPeek") {   ; toward the Claude tab at the side of the screen
+            spot := PeekSpot()   ; (the nearest point to it in the box's window)
+            ox := Max(0, Min(Look.W, spot.cx - pos.x)), oy := Max(Look.tabH, Min(h, spot.cy - pos.y))
+        }
         DllCall("gdiplus\GdipTranslateWorldTransform", "ptr", g, "float", -ox, "float", -oy, "int", 1)
         DllCall("gdiplus\GdipScaleWorldTransform", "ptr", g, "float", enter.scale, "float", enter.scale, "int", 1)
         DllCall("gdiplus\GdipTranslateWorldTransform", "ptr", g, "float", ox, "float", oy, "int", 1)
@@ -2145,12 +2788,25 @@ Draw() {
     shadow := solid < 0.35 ? (1 - solid / 0.35) * 0.8 : 0
     DrawTabs(shadow)
     if (Anim.listen > 0.01)
-        DrawListening(hb)
-    DrawConversation(Look.pad, hb - 2 * Look.pad, shadow)
+        DrawVoiceLight(hb)
+    ; After switching to another conversation, it slides in from the side (or from below).
+    age := A_TickCount - Anim.switchAt, dx := dy := 0
+    if (Settings.Animate && age < 360) {
+        off := (1 - (1 - age / 360) ** 3) * 24 * Look.s - 24 * Look.s
+        dx := Anim.switchDir * -off, dy := Anim.switchDir ? 0 : -off
+        DllCall("gdiplus\GdipTranslateWorldTransform", "ptr", g, "float", dx, "float", dy, "int", 0)
+    }
+    DrawConversation(Look.pad + stripH, hb - 2 * Look.pad - stripH - linksH, shadow)
+    if (dx || dy)
+        DllCall("gdiplus\GdipTranslateWorldTransform", "ptr", g, "float", -dx, "float", -dy, "int", 0)
+    DrawStickyLabel(Look.pad, stripH, View.bottom - (hb - 2 * Look.pad - stripH - linksH), shadow)
+    DrawLinks(hb - Look.pad - linksH + Round(4 * Look.s), linksH)
     if (Anim.above > 0.01)
         DrawMoreAbove(shadow)
     if (Current.newAt && A_TickCount - Current.newAt < NEW_BADGE_MS)
         DrawNewBadge(Current)
+    else if (Anim.listen > 0.01)
+        DrawVoicePill()
     if (Anim.liveAt && A_TickCount - Anim.liveAt < LIVE_BADGE_MS)
         DrawLiveBadge(hb)
     DrawHandles(hb)
@@ -2164,25 +2820,35 @@ Draw() {
         DllCall("ShowWindow", "ptr", BoxGui.Hwnd, "int", 8)   ; SW_SHOWNA: show it without taking the keyboard
         Anim.shown := true
         SetTimer(WatchMouse, 50)
+        SetTimer(CheckSeen, 200)
     } else if (!alpha && Anim.shown) {
         DllCall("ShowWindow", "ptr", BoxGui.Hwnd, "int", 0)
         Anim.shown := false
         SetTimer(WatchMouse, 0)
+        SetTimer(CheckSeen, 0)
         Anim.hover := Anim.hoverTarget := 0
         Anim.panel := Anim.panelTarget := 0   ; the list beside it closes too
         if (Anim.hot != "")
             Anim.hot := "", ClickThrough(true)
     }
     DrawPanel(enter.alpha)
+    DrawPeek()
+    if (Browser.hwnd && A_TickCount - Browser.movedAt > 300)
+        MoveBrowser()
 }
 
 ; How the box looks partway through showing up (Anim.p heading to 1) or going away (heading to 0):
 ; how see-through it is, how big (Pop grows out of its corner), and how far it still has to slide
 ; in from the edge of the screen (Slide). Going away runs the same curve backwards, so it starts
-; gently and finishes quickly.
+; gently and finishes quickly. Going into the Claude tab at the side (or coming out of it), it
+; shrinks right down into the tab (toPeek).
 Entrance() {
     p := Anim.p
     settle := 1 - (1 - p) ** 3   ; quick at first, then settling
+    if (Anim.tucking && Settings.Animate) {
+        even := p * p * (3 - 2 * p)
+        return {alpha: Min(1, p * 1.6), scale: 0.08 + 0.92 * even, shift: 0, toPeek: true}
+    }
     switch Settings.Appear {
         case "Pop":
             return {alpha: settle, scale: 0.86 + 0.14 * (1 - (1 - p) ** 4), shift: 0}
@@ -2208,15 +2874,18 @@ DrawConversation(top, viewH, shadow) {
         if (ex.y > viewTop + viewH)
             break
         live := ex = Current
-        for part in ex.parts {
+        for j, part in ex.parts {
             y := top + ex.y + part.y - viewTop
             if (part.key = "work") {
                 if (y < top + viewH && y + Look.smallH > top)
                     DrawWork(part.line, y, EdgeFade(edges, y, Look.smallH), shadow)
                 continue
             }
-            if (y < top + viewH && y + Look.labelH > top)
-                DrawLabel(ex, part, y, EdgeFade(edges, y, Look.labelH), shadow)
+            ; The message you're pointing at shows its time.
+            bottom := top + ex.y + (j < ex.parts.Length ? ex.parts[j + 1].y : ex.height) - viewTop
+            focus := Anim.hover > 0.5 && Anim.mouseY != "" && Anim.mouseY >= y && Anim.mouseY < bottom
+            if (y < top + viewH && y + Look.labelH > top && !(Anim.sticky >= 0.99 && y < top + Look.labelH / 2))   ; (up in the strip instead)
+                DrawLabel(ex, part, y, EdgeFade(edges, y, Look.labelH), shadow, focus)
             textTop := top + ex.y + part.textY - viewTop
             if part.dots {
                 DrawDots(textTop, EdgeFade(edges, textTop, lineH))
@@ -2249,6 +2918,14 @@ DrawConversation(top, viewH, shadow) {
                 i++
             }
         }
+        ; Scrolled back, where the words you haven't seen yet start is marked by a thin line with
+        ; NEW on it, which fades away once you've seen them.
+        at := ex.unseenAt != "" ? ex.unseenAt : ex.lastUnseenAt, fade := ex.unseenAt != "" ? 1 : 1 - (now - ex.newGoneAt) / 900
+        if (at != "" && fade > 0 && View.scrolled) {
+            ly := top + ex.y + at - viewTop
+            if (ly > top - lineH && ly < top + viewH)
+                DrawNewLine(ly, fade * EdgeFade(edges, ly - Look.labelH / 2, Look.labelH))
+        }
     }
     DllCall("gdiplus\GdipResetClip", "ptr", Canvas.g)
     ; The scroll bar: how much of the conversation shows, and where. It's noted in Anim.bar (in
@@ -2263,6 +2940,47 @@ DrawConversation(top, viewH, shadow) {
         FillPill(Look.W - 5 * Look.s - barW, Anim.bar.y, barW, barH,
             ARGB((wide ? 0.55 : 0.3) * (View.scrolled ? 1 : Anim.hover), Look.colors.text))
     }
+}
+
+; Where the words you haven't seen start (the top of their paragraph, at y): a thin line in
+; Claude's color with a small NEW on its right.
+DrawNewLine(y, a) {
+    s := Look.s, c := Look.colors, text := "NEW", h := Look.labelH - 2 * s
+    w := 14 * s + TextWidth(text, Look.labelFont), x := Look.pad + Look.inner - w, ly := y + s
+    FillRect(Look.pad, ly, x - Look.pad - 6 * s, Max(1, s), ARGB(a * 0.55, c.claude))
+    FillRoundRect(x, ly - h / 2, w, h, h / 2, ARGB(a * Max(0.85, Settings.Background / 100), c.bg))
+    FillRoundRect(x, ly - h / 2, w, h, h / 2, ARGB(a * 0.25, c.claude))
+    DrawWord(text, Look.labelFont, x + 7 * s, ly - h / 2 + (h - Look.labelH) / 2 + Look.labelDy, a, c.claude, 0)
+}
+
+; While you scroll back, the name on the message the top of the box is in (whose words you're
+; reading) stays in a strip at the top, on its side, so you always know; when the next message's
+; name comes up, it pushes this one up and out. A name right at the top of the words moves up into
+; the strip (see DrawConversation, which leaves it out there). Its time shows too.
+DrawStickyLabel(top, stripH, viewTop, shadow) {
+    if (stripH < 1)
+        return
+    best := "", bestEx := "", nextY := ""
+    loop History.Length + 1 {
+        ex := A_Index <= History.Length ? History[A_Index] : Current
+        for part in ex.parts {
+            if !part.HasOwnProp("label")   ; (what Claude is doing has no name)
+                continue
+            if (ex.y + part.y < viewTop + Look.labelH / 2) {
+                best := part, bestEx := ex
+            } else {
+                nextY := ex.y + part.y
+                break 2
+            }
+        }
+    }
+    if !best
+        return
+    push := nextY = "" ? 0 : Min(0, nextY - viewTop - Look.labelH)
+    DllCall("gdiplus\GdipSetClipRect", "ptr", Canvas.g, "float", 0, "float", top, "float", Look.W, "float", stripH, "int", 0)
+    DrawLabel(bestEx, best, top + stripH - Look.labelH + push, 1, shadow, true)
+    DllCall("gdiplus\GdipResetClip", "ptr", Canvas.g)
+    FillRect(Look.pad, top + stripH - Look.s, Look.inner, Look.s, ARGB(0.1 * stripH / Look.labelH, Look.colors.text))
 }
 
 ; How much of something at y (h tall) shows inside the box: a line partly past an edge (while
@@ -2291,10 +3009,12 @@ FirstVisible(tokens, minY) {
 }
 
 ; A part's label, like "YOU · 10:32 AM", "YOU · LISTENING" or "CLAUDE · RESPONDING". What's
-; happening now pulses gently; the time is dimmer. While voice mode is on, what you're saying gets
-; a VOICE MODE tag after its label, and while Claude reads its reply out loud, its label says
-; SPEAKING. On the Chat page, what you said is on the right, and so is its label.
-DrawLabel(ex, part, y, a, shadow) {
+; happening now pulses gently. The time is dimmer, and shows only while you scroll back (and for a
+; few seconds after), or on the message you're pointing at (focus). While voice mode is on, what
+; you're saying gets a VOICE MODE tag, and while Claude reads its reply out loud, its label says
+; SPEAKING. On the Chat page, what you said is on the right, and so is its label, mirrored so the
+; name stays at the edge: "10:32 AM · YOU".
+DrawLabel(ex, part, y, a, shadow, focus := false) {
     color := Look.colors.%part.color%
     live := ex = Current, status := "", pulse := false
     switch part.key {
@@ -2307,20 +3027,29 @@ DrawLabel(ex, part, y, a, shadow) {
             else
                 pulse := live && ex.claudeStatus != "", status := pulse ? ex.claudeStatus : ex.replyTime
     }
-    status := status != "" ? "·  " status : ""
+    shows := pulse ? 1 : Max(Anim.times, focus ? 1 : 0)   ; a time shows only now and then
     tag := live && part.key = "you" && VoiceMode ? "VOICE MODE" : ""
-    labelW := TextWidth(part.label, Look.labelFont)
-    width := labelW + (status != "" ? Look.labelSpace + TextWidth(status, Look.labelFont) : 0) + (tag != "" ? 8 * Look.s + TagWidth(tag) : 0)
-    x := part.align = "right" ? Look.pad + Look.inner - width : Look.pad
-    DrawWord(part.label, Look.labelFont, x, y + Look.labelDy, a, color, shadow)
-    x += labelW
-    if (status != "") {
-        x += Look.labelSpace
-        DrawWord(status, Look.labelFont, x, y + Look.labelDy, a * (pulse ? 0.7 + 0.3 * Cos(A_TickCount / 1800 * 6.2832) : 0.6), color, shadow)
-        x += TextWidth(status, Look.labelFont)
+    s := Look.s, labelW := TextWidth(part.label, Look.labelFont)
+    statusW := status != "" ? (Look.labelSpace + TextWidth("·  " status, Look.labelFont)) * shows : 0
+    tagW := tag != "" ? 8 * s + TagWidth(tag) : 0
+    statusA := a * shows * (pulse ? 0.7 + 0.3 * Cos(A_TickCount / 1800 * 6.2832) : 0.6)
+    if (part.align = "right") {
+        x := Look.pad + Look.inner - labelW
+        DrawWord(part.label, Look.labelFont, x, y + Look.labelDy, a, color, shadow)
+        if (status != "" && shows > 0.01) {
+            text := status "  ·"
+            DrawWord(text, Look.labelFont, x - Look.labelSpace - TextWidth(text, Look.labelFont), y + Look.labelDy, statusA, color, shadow)
+        }
+        if (tag != "")
+            DrawTag(tag, x - statusW - tagW, y, a, color)
+    } else {
+        x := Look.pad
+        DrawWord(part.label, Look.labelFont, x, y + Look.labelDy, a, color, shadow)
+        if (status != "" && shows > 0.01)
+            DrawWord("·  " status, Look.labelFont, x + labelW + Look.labelSpace, y + Look.labelDy, statusA, color, shadow)
+        if (tag != "")
+            DrawTag(tag, x + labelW + statusW + 8 * s, y, a, color)
     }
-    if (tag != "")
-        DrawTag(tag, x + 8 * Look.s, y, a, color)
 }
 
 ; A little tag in a label's row, like VOICE MODE by what you said while voice mode is on: a
@@ -2340,13 +3069,37 @@ DrawTag(text, x, y, a, color) {
 TagWidth(text) => 14 * Look.s + (Look.icons.Has("mic") ? Look.icons["mic"].w + 4 * Look.s : 0) + TextWidth(text, Look.labelFont)
 
 ; The "new message" badge: a pill with a message icon and the time, floating above the box's top
-; right corner, level with the tab, so it shows wherever in the reply the new words are and never
-; covers any. It pops in, stays a moment, then fades away.
+; right corner, level with the tabs and sized to them, so it shows wherever in the reply the new
+; words are and never covers any. If the time doesn't fit beside the tabs, it just says NEW, and
+; if that doesn't either, it's just the icon. It pops in, stays a moment, then fades away.
 DrawNewBadge(ex) {
-    s := Look.s, text := "NEW  ·  " ex.newTime
+    s := Look.s, h := Look.tabH - 4 * s, room := Look.W - Look.pad - Look.slots["code"].right - 8 * s
     iconW := Look.iconFont ? TextWidth(Look.messageGlyph, Look.iconFont) + 5 * s : 0
-    w := 8 * s + iconW + TextWidth(text, Look.labelFont) + 8 * s
-    DrawPill(Look.W - Look.pad - w, -Look.tabH + s, w, A_TickCount - ex.newAt, NEW_BADGE_MS, 1100, iconW, text, true)
+    for text in ["NEW  ·  " ex.newTime, "NEW", ""] {
+        w := 16 * s + iconW + (text = "" ? -5 * s : TextWidth(text, Look.labelFont))
+        if (w <= room && (text != "" || iconW))
+            return DrawPill(Look.W - Look.pad - w, 2 * s - Look.tabH, w, A_TickCount - ex.newAt, NEW_BADGE_MS, 1100, iconW, text, true, h)
+    }
+}
+
+; While voice mode is on, what it's doing, in a pill level with the tabs on the right: LISTENING
+; (blinking, so you know it's your turn to talk), SPEAKING or THINKING, after a blue dot that
+; swells with the voice.
+DrawVoicePill() {
+    state := VoiceState()
+    if (state = "")
+        return
+    s := Look.s, h := Look.tabH - 4 * s, c := Look.colors, text := StrUpper(state), t := A_TickCount / 1000
+    w := 16 * s + 2 * Look.dotR + 7 * s + TextWidth(text, Look.labelFont)
+    if (w > Look.W - Look.pad - Look.slots["code"].right - 8 * s)
+        return
+    x := Look.W - Look.pad - w, y := 2 * s - Look.tabH, a := Anim.listen
+    blink := state = "listening" ? 0.45 + 0.55 * (Cos(t * 6.2832 / 1.3) + 1) / 2 : 1
+    level := state = "speaking" ? Min(1, Voice.claudeLevel * 2.2) : state = "listening" ? Min(1, Voice.mic * 3) : (Sin(t * 6.2832 / 0.9) + 1) / 4
+    FillRoundRect(x, y, w, h, h / 2, ARGB(a * Max(0.85, Settings.Background / 100), c.bg))
+    FillRoundRect(x, y, w, h, h / 2, ARGB(a * 0.2, c.you))
+    FillCircle(x + 8 * s + Look.dotR, y + h / 2, Look.dotR * (0.9 + 0.6 * level), ARGB(a * (0.55 + 0.45 * blink), c.you))
+    DrawWord(text, Look.labelFont, x + 8 * s + 2 * Look.dotR + 7 * s, y + (h - Look.labelH) / 2 + Look.labelDy, a * blink, c.you, 0)
 }
 
 ; "LIVE" at the bottom of the box when you've scrolled back to the live captions, with a red dot.
@@ -2359,20 +3112,20 @@ DrawLiveBadge(h) {
     FillCircle(x + 8 * s + Look.dotR, y + pillH / 2, Look.dotR, ARGB(vis, 0xE5484D))
 }
 
-; A pill that pops in (growing a touch from its right end), stays, and fades away over fadeMs
-; before lastsMs is up: its label in Claude's color, after room (lead) for a message icon (if
-; icon) or a dot. It sits on the box's own color, so what's under it doesn't
-; show through. Returns how visible it is, from 0 to 1.
-DrawPill(x, y, w, age, lastsMs, fadeMs, lead, text, icon := false) {
-    s := Look.s, h := Look.labelH + 4 * s
+; A pill h tall (or a little taller than a label) that pops in (growing a touch from its right
+; end), stays, and fades away over fadeMs before lastsMs is up: its label in Claude's color, after
+; room (lead) for a message icon (if icon) or a dot. It sits on the box's own color, so what's
+; under it doesn't show through. Returns how visible it is, from 0 to 1.
+DrawPill(x, y, w, age, lastsMs, fadeMs, lead, text, icon := false, h := 0) {
+    s := Look.s, h := h || Look.labelH + 4 * s, rowTop := y + (h - Look.labelH) / 2
     vis := age < 200 ? age / 200 : age > lastsMs - fadeMs ? (lastsMs - age) / fadeMs : 1
     vis := Max(0, Min(1, vis)), vis := vis * vis * (3 - 2 * vis)   ; soft at both ends
     grow := 0.9 + 0.1 * Min(1, age / 200), gx := x + w * (1 - grow), gy := y + h * (1 - grow) / 2
     FillRoundRect(gx, gy, w * grow, h * grow, h / 2, ARGB(vis * Max(0.85, Settings.Background / 100), Look.colors.bg))
     FillRoundRect(gx, gy, w * grow, h * grow, h / 2, ARGB(vis * 0.22, Look.colors.claude))
     if (icon && Look.iconFont)
-        DrawWord(Look.messageGlyph, Look.iconFont, x + 8 * s, y + 2 * s + Look.iconDy, vis, Look.colors.claude, 0)
-    DrawWord(text, Look.labelFont, x + 8 * s + lead, y + 2 * s + Look.labelDy, vis, Look.colors.claude, 0)
+        DrawWord(Look.messageGlyph, Look.iconFont, x + 8 * s, rowTop + Look.iconDy, vis, Look.colors.claude, 0)
+    DrawWord(text, Look.labelFont, x + 8 * s + lead, rowTop + Look.labelDy, vis, Look.colors.claude, 0)
     return vis
 }
 
@@ -2536,11 +3289,11 @@ DrawLines(points, count, width, color) {
     DllCall("gdiplus\GdipDeletePen", "ptr", pen)
 }
 
-; The box's background (or, given w, another box that wide): a rectangle with rounded corners and
-; a faint edge, with the tab on top of it (if there's a tab), all one shape.
-RoundedBox(h, fill, edge, tab := "", w := 0) {
-    w := w || Look.W
-    path := tab ? TabbedPath(0.5, 0.5, w - 1, h - 1, Look.radius, tab) : RoundedPath(0.5, 0.5, w - 1, h - 1, Look.radius)
+; The box's background (or, given w, another box that wide, with corners r round): a rectangle with
+; rounded corners and a faint edge, with the tab on top of it (if there's a tab), all one shape.
+RoundedBox(h, fill, edge, tab := "", w := 0, r := 0) {
+    w := w || Look.W, r := r || Look.radius
+    path := tab ? TabbedPath(0.5, 0.5, w - 1, h - 1, r, tab) : RoundedPath(0.5, 0.5, w - 1, h - 1, r)
     DllCall("gdiplus\GdipSetSolidFillColor", "ptr", Brush, "uint", fill)
     DllCall("gdiplus\GdipFillPath", "ptr", Canvas.g, "ptr", Brush, "ptr", path)
     DllCall("gdiplus\GdipCreatePen1", "uint", edge, "float", Look.s, "int", 2, "ptr*", &pen := 0)
@@ -2574,6 +3327,12 @@ TabShape() {
 
 TabLabel(which) => which = "chat" ? "CHAT & COWORK" : "CODE"
 
+; The color of the page Claude is on: blue for Code, Claude's orange for Chat and Cowork.
+PageColor() => Page = "code" ? Look.colors.you : Look.colors.claude
+
+; A color made darker (by some from 0 to 1).
+Darker(rgb, some) => Round((rgb >> 16 & 0xFF) * (1 - some)) << 16 | Round((rgb >> 8 & 0xFF) * (1 - some)) << 8 | Round((rgb & 0xFF) * (1 - some))
+
 ; How wide a tab is: ☰, or a page's icon and name, with room around them.
 TabWidth(which) => which = "menu" ? 24 * Look.s + (Look.icons.Has("menu") ? Look.icons["menu"].w : TextWidth("≡", Look.labelFont))
     : 23 * Look.s + (Look.icons.Has(which) ? Look.icons[which].w + 6 * Look.s : 0) + TextWidth(TabLabel(which), Look.labelFont)
@@ -2603,7 +3362,7 @@ DrawTabs(shadow) {
             if Look.icons.Has("menu") {
                 icon := Look.icons["menu"]
                 DrawWord(icon.glyph, Look.iconFont, slot.left + (slot.right - slot.left - icon.w) / 2, rowTop + icon.dy, a,
-                    Anim.panelTarget ? Look.colors.claude : Look.colors.text, shadow)
+                    Anim.panelTarget ? PageColor() : Look.colors.text, shadow)
             } else {
                 DrawWord("≡", Look.labelFont, slot.left + 12 * s, rowTop + Look.labelDy, a, Look.colors.text, shadow)
             }
@@ -2629,12 +3388,17 @@ TopRoundedPath(x, y, w, h, r) {
     return path
 }
 
-; While voice mode is listening for you, a soft blue light breathes up from the bottom of the box,
-; swelling as you talk, like the glow in Claude's own voice mode.
-DrawListening(h) {
+; In voice mode, a soft blue light rising from the bottom of the box, like the one in Claude's own
+; voice mode: it pulses with Claude's voice while Claude talks, breathes while it listens for you
+; (swelling as you talk), and shimmers faintly while Claude thinks.
+DrawVoiceLight(h) {
     static ends := Buffer(16)
-    breathe := (Sin(A_TickCount / 1000 * 6.2832 / 2.4) + 1) / 2   ; a breath every 2.4 seconds
-    strength := Min(1, Anim.listen * (0.5 + 0.3 * breathe + 0.5 * Min(1, Voice.mic * 3)))
+    state := VoiceState(), t := A_TickCount / 1000
+    breathe := (Sin(t * 6.2832 / 2.4) + 1) / 2   ; a breath every 2.4 seconds
+    level := state = "speaking" ? 0.45 + 0.7 * Min(1, Voice.claudeLevel * 2.2)
+        : state = "listening" ? 0.5 + 0.3 * breathe + 0.5 * Min(1, Voice.mic * 3)
+        : 0.3 + 0.2 * (Sin(t * 6.2832 / 0.9) + 1) / 2
+    strength := Min(1, Anim.listen * level)
     glowH := Min(h * 0.7, 80 * Look.s), top := h - glowH
     NumPut("float", 0, "float", top, "float", 0, "float", h, ends)
     DllCall("gdiplus\GdipCreateLineBrush", "ptr", ends, "ptr", ends.Ptr + 8, "uint", ARGB(0, Look.colors.you),
@@ -2655,9 +3419,10 @@ TogglePanel() {
 }
 
 ; The list beside the box of Claude's sessions (on the Code page) or chats (on the Chat and Cowork
-; page), as in Claude's sidebar: the one showing is highlighted, and each has a dot for what it's
-; doing (orange and breathing while it runs, red if something went wrong). It slides out from the
-; side of the box facing the middle of the screen, in its own window, since it takes clicks.
+; page), as in Claude's sidebar: a little darker than the box, on a rounded outline. The one showing
+; is highlighted in the page's color, and each has a dot for what it's doing (orange and breathing
+; while it runs, red if something went wrong). It slides out from the side of the box facing the
+; middle of the screen, in its own window, since it takes clicks.
 DrawPanel(enterAlpha) {
     global Canvas
     static showing := false
@@ -2675,7 +3440,7 @@ DrawPanel(enterAlpha) {
     saved := Canvas, Canvas := PanelCanvas   ; the drawing helpers draw on Canvas
     DllCall("gdiplus\GdipGraphicsClear", "ptr", Canvas.g, "uint", 0)
     solid := Max(0.92, Settings.Background / 100)   ; solid enough to read over anything
-    RoundedBox(h, ARGB(solid, c.bg), ARGB(solid * 0.12, c.edge), "", w)
+    RoundedBox(h, ARGB(solid, Darker(c.bg, c.light ? 0.06 : 0.3)), ARGB(0.22, c.text), "", w, 16 * s)
     pad := Look.panelPad + 6 * s
     DrawWord(Page = "chat" ? "CHATS" : "SESSIONS", Look.labelFont, pad, (Look.panelHead - Look.labelH) / 2 + 2 * s + Look.labelDy, 0.55, c.text, 0)
     if !rows
@@ -2685,7 +3450,7 @@ DrawPanel(enterAlpha) {
         row := list[A_Index], top := Look.panelHead + (A_Index - 1) * Look.rowH
         here := row.title == Sessions.current, hot := Anim.panelHot = A_Index
         if (here || hot)
-            FillRoundRect(Look.panelPad, top + 2 * s, w - 2 * Look.panelPad, Look.rowH - 4 * s, 7 * s, here ? ARGB(0.18, c.claude) : ARGB(0.08, c.text))
+            FillRoundRect(Look.panelPad, top + 2 * s, w - 2 * Look.panelPad, Look.rowH - 4 * s, 9 * s, here ? ARGB(0.2, PageColor()) : ARGB(0.08, c.text))
         r := Look.dotR * 1.2, cx := pad + r, cy := top + Look.rowH / 2
         if InStr(row.status, "Running")
             FillCircle(cx, cy, r * (0.8 + 0.3 * breathe), ARGB(0.45 + 0.5 * breathe, c.claude))
@@ -2805,6 +3570,12 @@ DrawHandles(h) {
     NumPut("float", Look.cogX - r, "float", Look.cogY - r, "float", 2 * r, "float", 2 * r, spot)
     DllCall("gdiplus\GdipSetSolidFillColor", "ptr", Brush, "uint", ARGB(Anim.hover * 0.9, c.text))
     DllCall("gdiplus\GdipDrawString", "ptr", Canvas.g, "wstr", Look.cogGlyph, "int", -1, "ptr", Look.cogFont.font, "ptr", spot, "ptr", CenterFormat, "ptr", Brush)
+    ; Beside it, the – that tucks the box into its tab at the side of the screen.
+    DllCall("gdiplus\GdipSetSolidFillColor", "ptr", Brush, "uint", ARGB(a * (Anim.hot = "mini" ? 0.24 : 0.10), c.text))
+    DllCall("gdiplus\GdipFillEllipse", "ptr", Canvas.g, "ptr", Brush, "float", Look.miniX - r, "float", Look.cogY - r, "float", 2 * r, "float", 2 * r)
+    NumPut("float", Look.miniX - r, "float", Look.cogY - r, "float", 2 * r, "float", 2 * r, spot)
+    DllCall("gdiplus\GdipSetSolidFillColor", "ptr", Brush, "uint", ARGB(Anim.hover * 0.9, c.text))
+    DllCall("gdiplus\GdipDrawString", "ptr", Canvas.g, "wstr", Look.icons.Has("menu") ? Chr(0xE921) : "–", "int", -1, "ptr", Look.cogFont.font, "ptr", spot, "ptr", CenterFormat, "ptr", Brush)
     ; Above it, level with the tab, a hint that the wheel scrolls back, when there's something
     ; earlier to see and the "new message" badge isn't there.
     if (!View.scrolled && HasEarlier() && !(Current.newAt && A_TickCount - Current.newAt < NEW_BADGE_MS)) {
@@ -2901,7 +3672,9 @@ TextWidth(text, f) {
 
 DefaultSettings() => {Font: FONT, FontSize: FONT_SIZE, Theme: THEME, Background: BACKGROUND, Corner: CORNER,
     Width: BOX_WIDTH, Lines: BOX_LINES, Animate: ANIMATE ? 1 : 0, WordSpeed: WORD_SPEED, ScrollSmooth: SCROLL_SMOOTH, Appear: APPEAR,
-    HideAfter: HIDE_AFTER, FollowVoice: FOLLOW_VOICE ? 1 : 0, GlowDelay: GLOW_DELAY, Bubbles: BUBBLES ? 1 : 0, OffsetX: 0, OffsetY: 0}
+    HideAfter: HIDE_AFTER, FollowVoice: FOLLOW_VOICE ? 1 : 0, GlowDelay: GLOW_DELAY, Bubbles: BUBBLES ? 1 : 0, Float: FLOAT_BOX ? 1 : 0,
+    TypingSound: TYPING_SOUND, CustomColors: CUSTOM_COLORS, Tuck: TUCK ? 1 : 0, TuckCount: TUCK_COUNT ? 1 : 0,
+    TuckWiggle: TUCK_WIGGLE ? 1 : 0, AutoLinks: AUTO_LINKS ? 1 : 0, OffsetX: 0, OffsetY: 0}
 
 LoadSettings() {
     global Settings
@@ -2924,6 +3697,10 @@ LoadSettings() {
         Settings.Corner := CORNER
     if !HasValue(APPEAR_STYLES, Settings.Appear)
         Settings.Appear := APPEAR
+    if !HasValue(TYPING_SOUNDS, Settings.TypingSound)
+        Settings.TypingSound := TYPING_SOUND
+    if !(Settings.CustomColors ~= "^([0-9A-Fa-f]{6},){4}[0-9A-Fa-f]{6}$")
+        Settings.CustomColors := CUSTOM_COLORS
     Settings.WordSpeed := Whole(Settings.WordSpeed, 1, 10, WORD_SPEED)
     Settings.ScrollSmooth := Whole(Settings.ScrollSmooth, 1, 10, SCROLL_SMOOTH)
     Settings.Lines := Whole(Settings.Lines, 4, 30, BOX_LINES)
@@ -2956,7 +3733,8 @@ OpenSettings(*) {
     c.FontSize := g.Add("Edit", "x+8 yp w70 Number")
     g.Add("UpDown", "Range8-40")
     g.Add("Text", "xm y+16", "Colors")
-    c.Theme := g.Add("DropDownList", "xm w328", THEMES)
+    c.Theme := g.Add("DropDownList", "xm w250", THEMES)
+    g.Add("Button", "x+8 yp-1 w70", "Custom…").OnEvent("Click", OpenCustomColors)
     g.Add("Text", "xm y+16", "Background")
     c.Background := g.Add("Slider", "xm w250 Range0-100 NoTicks")
     c.BackgroundText := g.Add("Text", "x+8 yp+4 w70")
@@ -2975,6 +3753,14 @@ OpenSettings(*) {
     c.GlowDelay := g.Add("Slider", "xm+18 w232 Range0-600 Line10 Page50 TickInterval100")
     c.GlowDelayText := g.Add("Text", "x+8 yp+4 w90")
     c.Bubbles := g.Add("Checkbox", "xm y+10", "On the Chat page, put what you say in bubbles")
+    c.Float := g.Add("Checkbox", "xm y+10", "Let the box float gently, leaning toward the mouse")
+    g.Add("Text", "xm y+12", "Sounds as Claude's words appear")
+    c.TypingSound := g.Add("DropDownList", "xm w328", TYPING_SOUNDS)
+    g.Add("Text", "xm y+12", "Tucked away (with the – by the cog), the Claude tab at the side:")
+    c.TuckCount := g.Add("Checkbox", "xm+18 y+6", "Counts the replies that come in")
+    c.TuckWiggle := g.Add("Checkbox", "xm+18 y+6", "Wiggles when Claude has something new")
+    c.Tuck := g.Add("Checkbox", "xm y+10", "Tuck the box away there whenever it hides, too")
+    c.AutoLinks := g.Add("Checkbox", "xm y+10", "Open the first link in Claude's replies under the box by itself")
     c.Animate := g.Add("Checkbox", "xm y+10", "Words fade in and the box moves smoothly")
     g.Add("Text", "xm y+12", "Word speed")
     c.WordSpeed := g.Add("Slider", "xm w250 Range1-10 TickInterval1")
@@ -3013,6 +3799,9 @@ FillSettings(st) {
     c.FollowVoice.Value := st.FollowVoice
     c.GlowDelay.Value := st.GlowDelay
     c.Bubbles.Value := st.Bubbles
+    c.Float.Value := st.Float
+    c.Tuck.Value := st.Tuck, c.TuckCount.Value := st.TuckCount, c.TuckWiggle.Value := st.TuckWiggle, c.AutoLinks.Value := st.AutoLinks
+    c.TypingSound.Choose(st.TypingSound)
     c.Animate.Value := st.Animate
     c.WordSpeed.Value := st.WordSpeed
     c.ScrollSmooth.Value := st.ScrollSmooth
@@ -3043,6 +3832,14 @@ SettingsChanged(*) {
     Settings.FollowVoice := c.FollowVoice.Value
     Settings.GlowDelay := c.GlowDelay.Value
     Settings.Bubbles := c.Bubbles.Value
+    Settings.Float := c.Float.Value
+    Settings.Tuck := c.Tuck.Value, Settings.TuckCount := c.TuckCount.Value, Settings.TuckWiggle := c.TuckWiggle.Value
+    Settings.AutoLinks := c.AutoLinks.Value
+    if (c.TypingSound.Text != Settings.TypingSound) {
+        Settings.TypingSound := c.TypingSound.Text
+        if (Settings.TypingSound != "Off")
+            SetTimer(PreviewTyping, -10)   ; plays them so you can hear
+    }
     Settings.Animate := c.Animate.Value
     Settings.WordSpeed := c.WordSpeed.Value
     Settings.ScrollSmooth := c.ScrollSmooth.Value
@@ -3054,6 +3851,55 @@ SettingsChanged(*) {
     ShowSliderValues()
     SaveSettings()
     ApplySettings()
+}
+
+; A small window for picking your own colors: the background, the words, your name, Claude's name
+; and code, each with a swatch and a Change... button that opens Windows' color picker. Picking a
+; color switches the box to your colors ("Custom").
+OpenCustomColors(*) {
+    static rows := ["Background", "Words", "You", "Claude", "Code"]
+    colors := StrSplit(Settings.CustomColors, ",")
+    g := Gui("+AlwaysOnTop -MinimizeBox" (SettingsGui ? " +Owner" SettingsGui.Hwnd : ""), "Custom colors")
+    g.SetFont("s10", "Segoe UI")
+    g.MarginX := 16, g.MarginY := 12
+    for i, name in rows {
+        g.Add("Text", "xm w90 " (i > 1 ? "y+12" : ""), name)
+        swatch := g.Add("Text", "x+6 yp-2 w60 h22 +Border Background" colors[i])
+        g.Add("Button", "x+8 yp-1 w90", "Change…").OnEvent("Click", PickColor.Bind(i, swatch))
+    }
+    g.Add("Button", "xm y+18 w90 Default", "Done").OnEvent("Click", (*) => g.Destroy())
+    g.OnEvent("Escape", (*) => g.Destroy())
+    g.Show()
+}
+
+; Picks one of your colors (the which-th, see OpenCustomColors) in Windows' color picker.
+PickColor(which, swatch, *) {
+    colors := StrSplit(Settings.CustomColors, ",")
+    if ((picked := ChooseColor(colors[which], swatch.Gui.Hwnd)) = "")
+        return
+    colors[which] := picked, Settings.CustomColors := ""
+    for i, color in colors
+        Settings.CustomColors .= (i > 1 ? "," : "") color
+    swatch.Opt("Background" picked)
+    Settings.Theme := "Custom"
+    if SettingsControls
+        SettingsControls.Theme.Choose("Custom")
+    SaveSettings()
+    ApplySettings()
+}
+
+; Windows' color picker, starting at a color ("RRGGBB"). Returns the color picked, or "" if you
+; cancelled. (Windows keeps colors the other way round: blue, green, red.)
+ChooseColor(hex, owner) {
+    static custom := Buffer(64, 0)   ; its 16 "custom colors", kept while captions are on
+    rgb := Integer("0x" hex), picker := Buffer(72, 0)   ; CHOOSECOLOR
+    NumPut("uint", 72, picker, 0), NumPut("ptr", owner, picker, 8)
+    NumPut("uint", (rgb & 0xFF) << 16 | rgb & 0xFF00 | rgb >> 16 & 0xFF, picker, 24)
+    NumPut("ptr", custom.Ptr, picker, 32), NumPut("uint", 0x3, picker, 40)   ; CC_RGBINIT | CC_FULLOPEN
+    if !DllCall("comdlg32\ChooseColorW", "ptr", picker)
+        return ""
+    bgr := NumGet(picker, 24, "uint")
+    return Format("{:06X}", (bgr & 0xFF) << 16 | bgr & 0xFF00 | bgr >> 16 & 0xFF)
 }
 
 ; Hides the box and brings it back, to show off how it shows up.

@@ -19,7 +19,7 @@ on-screen **captions** of your conversation for the Claude desktop app on Window
 | `claude-voice-on-off.ahk` | **Chat page:** voice mode on/off. **Code page:** dictation on/off (types what you say; you send it). |
 | `claude-voice-on-off-send.ahk` | Like the one above, but dictation **sends itself** when you stop talking, then listens again after Claude replies, for a back-and-forth conversation. |
 | `claude-hey-claude.ahk` | Listens for **"Hey Claude"**. On the Chat page it starts voice mode; on the Code page it takes one dictated message and sends it. Running it again turns it off. |
-| `claude-captions.ahk` | **On-screen captions:** a small box in the corner of your screen showing what you say and what Claude says back, as it happens. In voice mode each word lights up as Claude says it. Running it again turns it off. |
+| `claude-captions.ahk` | **On-screen captions:** a small box in the corner of your screen showing what you say and what Claude says back, as it happens. It can tuck away into a little Claude tab at the side of the screen, and open links from Claude's replies in a page right under it. Running it again turns it off. |
 | `claude-hotkeys.ahk` | Keyboard shortcuts for all of the above, for use **without a Stream Deck**. |
 | `claude-setup-check.ahk` | Checks everything the scripts need and tells you what's missing. Run it first. |
 
@@ -122,11 +122,23 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
   to switch Claude over. The **☰** tab lists your chats (or Code sessions) like Claude's sidebar
   does; click one to open it.
 - On the Chat page your words sit on the right and Claude's on the left (bubbles are an option).
-- **Voice mode:** each word lights up as Claude says it, and a soft blue light at the bottom of the
-  box shows when Claude is listening for you. A **VOICE MODE** tag sits by your words.
-- Scroll the mouse wheel over the box to read back through the conversation. A small arrow at the
-  top means some of the reply is above. Point at the box to drag it by the grip at the top or
-  resize it from a corner; "Put the box back in its corner" in its tray menu undoes a move.
+  Each page, and each chat or session, keeps its own conversation in the box.
+- **Voice mode:** a pill at the top says **LISTENING**, **THINKING** or **SPEAKING**, like Claude's
+  own voice mode, and a soft blue light at the bottom of the box shows when Claude is listening for
+  you. A **VOICE MODE** tag sits by your words. Words can also light up as Claude says them (an
+  option in the settings, off at first).
+- Scroll the mouse wheel over the box to read back through the conversation. While you do, the
+  name of who's talking stays pinned at the top and each message's time fades in. A small arrow at
+  the top means there's something above you haven't seen yet, and a **NEW** line marks where it
+  starts. Point at the box to drag it by the grip at the top or resize it from a corner; "Put the
+  box back in its corner" in its tray menu undoes a move.
+- **Tuck it away:** point at the box and click the **–** next to the cog. The box shrinks into a
+  little tab with Claude's logo peeking out from the side of your screen. Point at the tab and it
+  pops out a bit; click it and the box grows back. While it's tucked away, the tab wiggles and
+  counts Claude's replies so you know something's waiting.
+- **Links:** when Claude's reply links to a website, small pills show at the bottom of the box
+  (like "youtube.com"). Click one to open the page in a window attached right under the box; click
+  it again to close it. Pages open in Microsoft Edge (or your usual browser if Edge isn't there).
 - Clicks go straight through the box to whatever is underneath (only its handles and tabs take
   clicks), and it never takes the keyboard from what you're typing in.
 
@@ -144,7 +156,7 @@ Each script has a Settings block near the top. The most useful ones:
 | Hey Claude | `MIN_CONFIDENCE`, `MIN_LOUDNESS` | How sure and how loud "Hey Claude" must be. **Teach it my voice** sets both and saves them in `claude-hey-claude.ini` |
 | Hey Claude | `LOOK_ALIKES` | Phrases "Hey Claude" must beat. Add any word that keeps setting it off |
 | Hey Claude | `VOICE_IDLE_MS` | How long voice mode can sit on "Listening" before it ends (5 s; 0 turns it off) |
-| Captions | the **cog** on the box | Font and size, dark/light colors, how see-through it is (down to just the words), corner, width and height, how fast words fade in, scroll smoothness, how the box appears, how long it stays up, and whether words light up in voice mode. Saved in `claude-captions.ini` |
+| Captions | the **cog** on the box | Font and size, colors (Dark, Light, Match Windows, themes like Midnight, Ocean, Forest, Sunset, Paper, Rosé and Mono, or your own with **Custom…**), how see-through it is (down to just the words), corner, width and height, how fast words fade in, scroll smoothness, how the box appears, how long it stays up, whether words light up in voice mode, bubbles on the Chat page, a gently floating box, typing sounds (soft clicks, Animal Crossing or Undertale style), the Claude tab's count and wiggle, and opening links by themselves. Saved in `claude-captions.ini` |
 | Captions | **Glow timing** (same window) | If the lit-up word runs ahead of Claude's voice (common with sound mixers like Voicemeeter, or wireless headphones), slide it right |
 
 ## Privacy
@@ -175,6 +187,9 @@ Each script has a Settings block near the top. The most useful ones:
 - **The captions' lit-up words run ahead of (or behind) Claude's voice:** point at the box, click
   the cog, and move **Glow timing** while Claude talks.
 - **The captions' ☰ list is empty:** it reads Claude's sidebar, so keep the sidebar open in Claude.
+- **The captions' box disappeared:** it may be tucked away. Look for the little Claude tab at the
+  side of your screen and click it, or pick "Tuck the box into the side (or bring it back)" in its
+  tray menu.
 - **A script can't find a button:** check Claude is in English. If Claude just updated, a button may
   have been renamed; the log's list of button names shows what it's called now.
 
