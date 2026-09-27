@@ -26,7 +26,9 @@ unzip it, and follow [Setup](#setup).
   new messages, rocks while Claude works and spins when it's done.
 - **Scroll back** through the conversation with the real time of each message, switch between
   Chat & Cowork and Code, and open any chat or session from the **☰** list.
-- **Links** in Claude's replies open in a page attached right under the box.
+- **Links** in Claude's replies open in a page attached right under the box, lined up with it.
+  Minimize the page and it tucks into a tab of its own on the box; drag it anywhere out of the way,
+  and drop it back on its outline to snap it on again.
 - **Extras:** Code replies read out loud, typing sounds (soft clicks, Animal Crossing or Undertale
   style), text that types itself out letter by letter.
 - **Make it yours:** themes or your own colors, any font and size, a see-through background,
@@ -193,14 +195,24 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
   it and everything comes back. While it's tucked away, the logo rocks while Claude works, spins
   when it's done, and counts each new message (blue for Code, red for Chat & Cowork).
 - **Links:** when Claude's reply links to a website, small pills show at the bottom of the box
-  (like "youtube.com"). Click one to open the page in a window attached right under the box; click
-  it again to close it. Pages open in Microsoft Edge (or your usual browser if Edge isn't there).
+  (like "youtube.com"). Click one to open the page in a window attached right under the box, as
+  wide as the box and lined up with it; click it again to close it. Pages open in Microsoft Edge
+  (or your usual browser if Edge isn't there).
+  - **Minimize the page** and it doesn't go to the taskbar: it tucks into a tab on the box, with a
+    globe and the site's name (the Chat & Cowork and Code tabs go down to just their icons to make
+    room if they need to). Click that tab to bring the page back.
+  - **Drag the page** by its title bar to move it out of the way: it comes off the box and stays
+    where you put it. Drag it back near its place and an outline shows where it'll snap back on;
+    let go there and it does.
+  - **In a game**, the page opens without taking the front from the game, and stays on top of it.
 - Clicks go straight through the box to whatever is underneath (only its handles and tabs take
   clicks), and it never takes the keyboard from what you're typing in.
 - **Games:** the captions start themselves with AutoHotkey's UI Access version when it's installed
   (the standard installer includes it), which lets the box show over full-screen games. Set games
   to their **borderless** (windowed full screen) mode: in exclusive full screen, a game can drop to
-  the desktop when anything is drawn over it. While a game is in front, **Game mode** keeps the box
+  the desktop when anything is drawn over it. In a game, pointing at the box shows the pointer over
+  it (once it's rested there a moment, so a game's hidden pointer drifting by doesn't count), and
+  the page tabs switch instantly. While a game is in front, **Game mode** keeps the box
   still and light, hides the Claude tab until there's something new, and stops other programs from
   pulling themselves in front of the game.
 - **"Hey Claude" in a game:** it notices the game and works from behind it, clicking Claude's

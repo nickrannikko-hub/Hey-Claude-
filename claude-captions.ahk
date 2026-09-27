@@ -131,7 +131,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.6.3"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.6.4"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -246,7 +246,7 @@ PeekGui := "", PeekCanvas := "" ; the tab with Claude's logo the box tucks into
 ; The page from Claude's reply open under the box, if there is one: its window, address, which side
 ; of the box it's on (side), where the box last put it (set), the size you gave it (w, h; 0 until
 ; you do), whether it's down on the taskbar (min), and what notices you moving it (hook).
-Browser := {hwnd: 0, url: "", side: "", set: "", w: 0, h: 0, min: false, hook: 0}
+Browser := {hwnd: 0, url: "", side: "", set: "", w: 0, h: 0, min: false, hook: 0, top: false, inset: "", tucked: false, detached: false, hook2: 0}
 Opened := false                 ; you opened the box from its Claude tab, so it shows even with nothing to show
 LoadingEarlier := false         ; Claude's window is scrolled up for a moment, to read older messages (see LoadOlder)
 Composing := false              ; you're typing to Claude in the box at the bottom (see StartTyping)
@@ -285,7 +285,7 @@ View := {bottom: 0.0, h: 0.0, bottomSpeed: 0.0, hSpeed: 0.0, scrolled: false, to
 ; thinks), and whether something changed that needs drawing (dirty).
 Anim := {running: false, last: 0, lastDraw: 0, p: 0.0, target: 0, hover: 0.0, hoverTarget: 0,
     hot: "", shown: false, x: 0, y: 0, h: 0, bar: "", liveAt: 0, above: 0.0, aboveAt: 0,
-    tabLeft: 0.0, tabRight: 0.0, tabSpeedL: 0.0, tabSpeedR: 0.0, panel: 0.0, panelTarget: 0, panelHot: 0,
+    through: true, tabLeft: 0.0, tabRight: 0.0, tabSpeedL: 0.0, tabSpeedR: 0.0, panel: 0.0, panelTarget: 0, panelHot: 0,
     panelX: 0, panelY: 0, panelH: 0, listen: 0.0, switchAt: 0, switchDir: 0, sticky: 0.0, times: 0.0, mouseY: "",
     lineGoneAt: 0, leanX: 0.0, leanY: 0.0, leanSX: 0.0, leanSY: 0.0, floatK: 0.0, baseX: 0, baseY: 0, tucking: false, peek: 0.0, peekHover: 0.0,
     peekHot: false, peekX: 0, peekY: 0, peekW: 0, peekH: 0, peekCounts: {code: 0, chat: 0}, wiggleAt: 0, spinAt: 0, tuckedAt: 0, jiggleAt: 0, links: 0.0,
@@ -319,6 +319,9 @@ SettledAt := 0                  ; until when what Claude's window shows counts a
 SettingsGui := "", SetUI := ""   ; the settings window, and how it's doing (see OpenSettings)
 Times := Map()                  ; when your messages were sent and replied to, by their words (see GiveTimes)
 GameFront := false              ; a game (or anything full screen) is in front (see Gaming)
+PageAsked := {page: "", at: 0}  ; the page of Claude's you just switched to from the box, until Claude's window shows it (see SelectPage)
+PageConvs := Map()              ; the conversation the box last showed on each page ("chat" or "code"), by its key
+SnapGui := "", SnapCanvas := "" ; the outline showing where the page snaps back on (see ShowSnapSpot)
 
 if (A_LineFile = A_ScriptFullPath)
     CaptionsMain()
@@ -414,8 +417,8 @@ GoAway(*) {
     MuteClaude(true)
     try StopReading()
     GuardGame(false)
-    if (Browser.hwnd && WinExist(Browser.hwnd))
-        try WinClose(Browser.hwnd)
+    if PageOpen()
+        DllCall("PostMessage", "ptr", Browser.hwnd, "uint", 0x10, "ptr", 0, "ptr", 0)   ; WM_CLOSE (it may be out of sight)
     if !Anim.shown
         return
     Anim.target := 0, Anim.last := A_TickCount
@@ -441,6 +444,7 @@ CheckGameFront() {
         GameFront := front
         Kick()
         UpdateVisibility()
+        KeepPageUp()
     }
     GuardGame(Gaming())
 }
@@ -504,8 +508,9 @@ UpdateCaptions() {
     if (Mod(++Reads, 5) = 0)
         CheckWindowsColors()
     CheckGameFront()
-    if (Browser.hwnd && !WinExist(Browser.hwnd))   ; you closed the page under the box
+    if (Browser.hwnd && !PageOpen())   ; you closed the page under the box
         ClosePage()
+    KeepPageUp()
     if Hidden
         return UpdateVisibility()
     ; While you scroll or drag the box, reading waits: a read takes long enough to make the motion stutter.
@@ -522,6 +527,16 @@ UpdateCaptions() {
     } catch {
         UpdateVisibility()   ; (so the box still goes away on time)
         return   ; the window changed while it was being read; try again next time
+    }
+    ; You just switched Claude's page from the box, which went to that page's conversation straight
+    ; away (see SelectPage): until Claude's window has caught up, what it still shows is the page
+    ; before, which isn't news.
+    if (PageAsked.page != "") {
+        onPage := now.convo != "" ? StrSplit(now.convo, "|")[1] : ""
+        if (onPage = PageAsked.page || onPage = "" && A_TickCount - PageAsked.at > 1500 || A_TickCount - PageAsked.at > 4000)
+            PageAsked.page := ""
+        else
+            return UpdateVisibility()
     }
     micOn := now.listening
     if now.voice {   ; voice mode: Claude reads its replies out loud, so the words can light up as it does
@@ -630,9 +645,17 @@ SelectPage(which) {
     global PageAt
     NoticePage(which)
     PageAt := A_TickCount   ; gives Claude a moment before checking again
+    ; The box shows that page's conversation straight away (the one it last showed there), and
+    ; doesn't go back to the other while Claude's window catches up (see UpdateCaptions).
+    PageAsked.page := which, PageAsked.at := A_TickCount
+    if (PageConvs.Has(which) && PageConvs[which] != ConvKey)
+        SwitchConversation(PageConvs[which])
     try {
-        tab := FindByPrefix(FindClaudeWindow(), UIA_RADIO, which = "chat" ? "Chat and Cowork" : "Code")
-        if (tab && (pattern := GetPattern(tab.el, 10010, "{a8efa66a-0fda-421a-9194-38021f3578ea}")))
+        hwnd := FindClaudeWindow()
+        tab := FindByPrefix(hwnd, UIA_RADIO, which = "chat" ? "Chat and Cowork" : "Code")
+        ; In a game, Claude's switch is clicked with click messages: through UI Automation, Claude's
+        ; window would jump in front of the game (see PostClick, in claude-voice-on-off-send.ahk).
+        if (tab && !(Gaming() && PostClick(tab.el, hwnd)) && (pattern := GetPattern(tab.el, 10010, "{a8efa66a-0fda-421a-9194-38021f3578ea}")))
             ComCall(3, pattern)   ; Select
     }
 }
@@ -660,6 +683,7 @@ OpenSession(title) {
 ; session on the same page), just as it was when you left it.
 SwitchConversation(key) {
     global Current, History, ConvKey, Waiting
+    PageConvs[StrSplit(key, "|")[1]] := key   ; (for switching back to it from the box, see SelectPage)
     if (ConvKey = "") {   ; the first one: it's the one showing already
         ConvKey := key
         SetTimer(LoadEarlier, -1500)
@@ -2050,7 +2074,7 @@ UpdateVisibility() {
     busy := Shown.live || Shown.streaming || Shown.thinking || Shown.work != "" || Listening && !VoiceMode
         || state = "speaking" || state = "thinking" || Reader.speaking
     show := !Hidden && !Minimized && (SettingsGui || Current.note != "" || Waiting || View.scrolled || Anim.panelTarget || Composing
-        || Browser.hwnd || Anim.hoverTarget || (HasConversation() || Opened) && (recent || busy)) ? 1 : 0
+        || Browser.hwnd && !Browser.tucked && !Browser.detached || Anim.hoverTarget || (HasConversation() || Opened) && (recent || busy)) ? 1 : 0
     if !show
         Opened := false
     if (show != Anim.target) {
@@ -2102,13 +2126,26 @@ WatchMouse() {
     mouseY := part != "" ? my - Anim.y - Look.tabH : ""   ; from the top of the box
     if (mouseY != Anim.mouseY && (mouseY = "" || Anim.mouseY = "" || Abs(mouseY - Anim.mouseY) > 2))
         Anim.mouseY := mouseY, Kick()
+    ; In a game, pointing at the box only counts once the pointer has been on it for a moment (quicker
+    ; than anyone clicks once they get there), with no mouse button held: a game's hidden pointer drifting over the box while you play (and shoot)
+    ; mustn't take the mouse from the game.
+    static restingSince := 0
+    if (Gaming() && part != "")
+        restingSince := GetKeyState("LButton", "P") || GetKeyState("RButton", "P") || GetKeyState("MButton", "P") ? 0 : restingSince || A_TickCount
+    else
+        restingSince := 0
+    if (Gaming() && !(restingSince && A_TickCount - restingSince >= 60))
+        part := ""
     row := PanelRowAt(mx, my)   ; the list beside the box counts as part of it
     over := part != "" || OverPanel(mx, my) ? 1 : 0, hot := part = "box" ? "" : part
     if (row != Anim.panelHot)
         Anim.panelHot := row, Kick()
-    if (hot != Anim.hot) {
-        Anim.hot := hot
-        ClickThrough(hot = "")
+    ; Clicks go through the box except on its handles. But in a game, which hides the pointer, the
+    ; whole box takes the mouse while you point at it, so the pointer shows over all of it.
+    through := hot = "" && !(Gaming() && part != "")
+    if (hot != Anim.hot || through != Anim.through) {
+        Anim.hot := hot, Anim.through := through
+        ClickThrough(through)
         Kick()
     }
     if (over != Anim.hoverTarget) {
@@ -2204,6 +2241,8 @@ BoxMouseDown(wParam, lParam, msg, hwnd) {
         which := SubStr(hot, 5)
         if (which = "menu")
             TogglePanel()
+        else if (which = "page")   ; the page tucked away: back under the box
+            SetTimer(UntuckPage, -1)
         else
             SetTimer(SelectPage.Bind(which), -1)
         return 0
@@ -2340,7 +2379,7 @@ ScrollToBar(y) {
 ; moving and resizing.
 BoxCursor(wParam, lParam, msg, hwnd) {
     static shapes := Map("cog", 32649, "scroll", 32649, "move", 32646, "resize-tl", 32642, "resize-br", 32642,
-        "resize-tr", 32643, "resize-bl", 32643, "tab-menu", 32649, "tab-chat", 32649, "tab-code", 32649, "mini", 32649,
+        "resize-tr", 32643, "resize-bl", 32643, "tab-menu", 32649, "tab-chat", 32649, "tab-code", 32649, "tab-page", 32649, "mini", 32649,
         "input", 32513, "send", 32649)
     if (PanelGui && wParam = PanelGui.Hwnd && Anim.panelHot || PeekGui && wParam = PeekGui.Hwnd || BoxGui && wParam = BoxGui.Hwnd && InStr(Anim.hot, "link-") = 1) {   ; a hand over the list's rows, the Claude tab and links
         DllCall("SetCursor", "ptr", DllCall("LoadCursor", "ptr", 0, "ptr", 32649, "ptr"))
@@ -2354,6 +2393,10 @@ BoxCursor(wParam, lParam, msg, hwnd) {
     }
     if (BoxGui && wParam = BoxGui.Hwnd && shapes.Has(Anim.hot)) {
         DllCall("SetCursor", "ptr", DllCall("LoadCursor", "ptr", 0, "ptr", shapes[Anim.hot], "ptr"))
+        return true
+    }
+    if (BoxGui && wParam = BoxGui.Hwnd) {   ; anywhere else on it (in a game, see WatchMouse): the usual arrow
+        DllCall("SetCursor", "ptr", DllCall("LoadCursor", "ptr", 0, "ptr", 32512, "ptr"))
         return true
     }
 }
@@ -2803,7 +2846,7 @@ TuckMs(opening) {
 
 ; Tucks the box into its tab at the side of the screen (the – beside the cog), where it stays until
 ; you click the tab: everything goes, the list beside it, the settings and the page open under it
-; (down to the taskbar) too, and the typing sounds stop. It all comes back where it was.
+; (out of sight, not down to the taskbar) too, and the typing sounds stop. It all comes back where it was.
 Minimize() {
     global Minimized
     if Composing
@@ -2815,8 +2858,8 @@ Minimize() {
         DllCall("ShowWindow", "ptr", SettingsGui.Hwnd, "int", 0), SetUI.hidden := true
     ToLive()
     UpdateVisibility()
-    if (Browser.hwnd && WinExist(Browser.hwnd))
-        try WinMinimize(Browser.hwnd), Browser.min := true
+    if PageOpen()
+        DllCall("ShowWindow", "ptr", Browser.hwnd, "int", 0), Browser.min := true   ; SW_HIDE
 }
 
 ; Brings the box back out of its tab (it grows out of it), and clears the count; and the page that
@@ -2836,8 +2879,8 @@ OpenFromPeek(*) {
     }
     ShowWhatsNew()
     UpdateVisibility()
-    if (Browser.hwnd && WinExist(Browser.hwnd) && WinGetMinMax(Browser.hwnd) = -1)
-        try WinRestore(Browser.hwnd), Browser.min := false, Browser.set := ""
+    if (PageOpen() && !Browser.tucked)
+        BringPageBack()
     return 0
 }
 
@@ -3128,6 +3171,8 @@ OpenPage(url) {
         return
     if Browser.hwnd {
         same := Browser.url = url
+        if (same && Browser.tucked && PageOpen())   ; tucked into its tab: it comes back instead
+            return UntuckPage()
         ClosePage()
         if same
             return
@@ -3139,19 +3184,23 @@ OpenPage(url) {
         Run(url)
         return
     }
-    Browser := {hwnd: 0, url: url, side: "", set: "", w: 0, h: 0, min: false, hook: 0}
-    spot := BrowserSpot(), before := Map()
+    Browser := {hwnd: 0, url: url, side: "", set: "", w: 0, h: 0, min: false, hook: 0, top: false, inset: "", tucked: false, detached: false, hook2: 0}
+    spot := BrowserSpot(), edges := PageInsets(), before := Map()
     for hwnd in WinGetList("ahk_exe msedge.exe")
         before[hwnd] := true
-    Run('"' edge '" --app="' url '" --new-window --window-size=' spot.w ',' spot.h ' --window-position=' spot.x ',' spot.y)
+    cmd := '"' edge '" --app="' url '" --new-window --window-size=' (spot.w + edges.l + edges.r) ',' (spot.h + edges.t + edges.b)
+        . ' --window-position=' (spot.x - edges.l) ',' (spot.y - edges.t)
+    if !(Gaming() && LaunchQuietly(cmd))
+        Run(cmd)
     Kick()
     deadline := A_TickCount + 8000
     while (A_TickCount < deadline && Browser.url = url) {   ; its window: the new one Edge opens
         Sleep 150
         for hwnd in WinGetList("ahk_exe msedge.exe ahk_class Chrome_WidgetWin_1")
             if (!before.Has(hwnd) && DllCall("IsWindowVisible", "ptr", hwnd) && WinGetTitle(hwnd) != "") {
-                Browser.hwnd := hwnd
+                Browser.hwnd := hwnd, Browser.inset := PageInsets(hwnd), Browser.set := ""
                 WatchPage()
+                KeepPageUp()
                 MoveBrowser()
                 UpdateVisibility()
                 return
@@ -3163,24 +3212,149 @@ OpenPage(url) {
 ; stays up a while as usual (it counts as something happening), rather than going away with it.
 ClosePage() {
     global Browser, LastChange, Opened
-    if (Browser.hwnd && WinExist(Browser.hwnd))
-        try WinClose(Browser.hwnd)
+    if PageOpen()
+        DllCall("PostMessage", "ptr", Browser.hwnd, "uint", 0x10, "ptr", 0, "ptr", 0)   ; WM_CLOSE (it may be out of sight)
     if Browser.hook
         DllCall("UnhookWinEvent", "ptr", Browser.hook)
-    Browser := {hwnd: 0, url: "", side: "", set: "", w: 0, h: 0, min: false, hook: 0}
+    if Browser.hook2
+        DllCall("UnhookWinEvent", "ptr", Browser.hook2)
+    Browser := {hwnd: 0, url: "", side: "", set: "", w: 0, h: 0, min: false, hook: 0, top: false, inset: "", tucked: false, detached: false, hook2: 0}
     LastChange := A_TickCount, Opened := true
+    PlacePageTab()
     Kick()
     UpdateVisibility()
 }
 
-; Where the page goes: right under the box, or above it if there isn't room under it, or beside it if
-; there's room for neither, so it's never behind the box. It's as wide as the box and half the
-; screen tall, unless you've resized it. It keeps to the side it opened on while the box grows and
+; The page under the box is open (whether it shows or not).
+PageOpen() => Browser.hwnd && DllCall("IsWindow", "ptr", Browser.hwnd)
+
+; Shows the page again where it goes, without taking the front from anything.
+BringPageBack() {
+    if !PageOpen()
+        return
+    DllCall("ShowWindow", "ptr", Browser.hwnd, "int", DllCall("IsIconic", "ptr", Browser.hwnd) ? 4 : 8)   ; SW_SHOWNOACTIVATE (restoring it), or SW_SHOWNA
+    Browser.min := false, Browser.set := ""
+    KeepPageUp()
+    MoveBrowser()
+}
+
+; You minimized the page: instead of going down to the taskbar, it tucks into a tab of its own on
+; the box, beside the page tabs (see PlacePageTab). Click that (or its link again) to bring it back.
+TuckPage() {
+    if !PageOpen()
+        return
+    DllCall("ShowWindow", "ptr", Browser.hwnd, "int", 0)   ; SW_HIDE: out of sight, and off the taskbar
+    Browser.tucked := true, Browser.min := true
+    PlacePageTab(), Kick(), UpdateVisibility()
+}
+
+UntuckPage() {
+    Browser.tucked := false
+    PlacePageTab()
+    BringPageBack()
+    Kick(), UpdateVisibility()
+}
+
+; The tabs' places: ☰, then Chat and Cowork, then Code, from the box's left (or, with the box on
+; the left of the screen, from its right). While the page is tucked into a tab of its own and there
+; isn't room for it otherwise, Chat and Cowork and Code show just their icons (compact).
+TabSlots() {
+    s := Look.s, x := Look.radius + 8 * s
+    Look.slots := Map()
+    for which in ["menu", "chat", "code"] {
+        w := TabWidth(which)
+        Look.slots[which] := Look.mirror ? {left: Look.W - x - w, right: Look.W - x} : {left: x, right: x + w}
+        x += w + 4 * s
+    }
+}
+
+; While the page is tucked away, its tab: a globe and its site's name (cut short if it has to be),
+; after the page tabs (before them, while the tabs are the other way round), before the cog and the
+; –. The page tabs go down to just their icons if that's what makes room for it.
+PlacePageTab() {
+    wanted := Browser.tucked && PageOpen()
+    Look.compact := false, TabSlots()
+    if !wanted
+        return
+    s := Look.s
+    if (TabRoomAfterCode() < TabWidth("page"))
+        Look.compact := true, TabSlots()
+    room := TabRoomAfterCode(), w := Min(TabWidth("page"), room), code := Look.slots["code"]
+    if (w >= 40 * s)
+        Look.slots["page"] := Look.mirror ? {left: code.left - 4 * s - w, right: code.left - 4 * s} : {left: code.right + 4 * s, right: code.right + 4 * s + w}
+}
+
+TabRoomAfterCode() {
+    s := Look.s, code := Look.slots["code"], controls := Look.pad + 4 * Look.cogR + 14 * s
+    return Look.mirror ? code.left - 4 * s - controls : Look.W - controls - code.right - 4 * s
+}
+
+; You let go of the page after moving it (see PageMoved), or minimized it.
+PageEvent(hook, event, hwnd, idObject, idChild, thread, time) {
+    if (hwnd != Browser.hwnd || idObject != 0)
+        return
+    if (event = 0x0016)        ; EVENT_SYSTEM_MINIMIZESTART
+        SetTimer(TuckPage, -1)
+    else if (event = 0x000B)   ; EVENT_SYSTEM_MOVESIZEEND
+        SetTimer(PageDropped, -1)
+}
+
+; You let go of the page after moving it off the box: back near its place by the box, it snaps back
+; on; anywhere else, it stays where you put it.
+PageDropped() {
+    if !(Browser.detached && Browser.set)
+        return
+    Browser.detached := false   ; (to see where it'd go on the box)
+    spot := BrowserSpot(), set := Browser.set
+    ShowSnapSpot("")
+    if (Abs(set.x - spot.x) + Abs(set.y - spot.y) <= SnapZone()) {
+        Browser.set := ""
+        MoveBrowser(), Kick(), UpdateVisibility()
+    } else {
+        Browser.detached := true
+    }
+}
+
+; Starts a program (cmd) through Windows' management service (WMI) rather than from here. Started
+; from here just after you clicked the box, it would be allowed to take the front, and a page opening
+; in a game would drop you out of it (showing the taskbar and the Windows cursor). Returns false if
+; it couldn't.
+LaunchQuietly(cmd) {
+    try return ComObjGet("winmgmts:").Get("Win32_Process").Create(cmd, , , &pid := 0) = 0
+    return false
+}
+
+; How much of the page's window is invisible border (Windows gives windows an invisible edge, about
+; 7 pixels on the sides and bottom, to grab for resizing), from its window (or, before it's open, the
+; usual amount): so the page's visible edges line up with the box's.
+PageInsets(hwnd := 0) {
+    usual := {l: Round(7 * Look.s), t: 0, r: Round(7 * Look.s), b: Round(7 * Look.s)}
+    win := Buffer(16), seen := Buffer(16)
+    if (!hwnd || !DllCall("GetWindowRect", "ptr", hwnd, "ptr", win)
+        || DllCall("dwmapi\DwmGetWindowAttribute", "ptr", hwnd, "uint", 9, "ptr", seen, "uint", 16) != 0)   ; DWMWA_EXTENDED_FRAME_BOUNDS
+        return usual
+    return {l: NumGet(seen, 0, "int") - NumGet(win, 0, "int"), t: NumGet(seen, 4, "int") - NumGet(win, 4, "int"),
+        r: NumGet(win, 8, "int") - NumGet(seen, 8, "int"), b: NumGet(win, 12, "int") - NumGet(seen, 12, "int")}
+}
+
+; In a game (which often keeps its own window always on top), the page under the box is kept on
+; top too, so the game doesn't hide it; otherwise it's an ordinary window again.
+KeepPageUp() {
+    if !PageOpen()
+        return
+    top := Gaming()
+    if (top || Browser.top)
+        DllCall("SetWindowPos", "ptr", Browser.hwnd, "ptr", top ? -1 : -2, "int", 0, "int", 0, "int", 0, "int", 0, "uint", 0x13), Browser.top := top   ; HWND_TOPMOST or HWND_NOTOPMOST; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+}
+
+; Where the page goes (its visible edges): right under the box, or above it if there isn't room under
+; it, or beside it if there's room for neither, so it's never behind the box. It's as wide as the box
+; and centered on it, and half the screen tall, unless you've resized it. It keeps to the side it opened on while the box grows and
 ; shrinks, as long as there's room there.
 BrowserSpot() {
     MonitorGetWorkArea(BoxMonitor(), &left, &top, &right, &bottom)
     s := Look.s, gap := Round(8 * s), least := Round(220 * s)
-    w := Browser.w || Max(Look.W, Round(420 * s)), want := Browser.h || Round((bottom - top) * 0.5)
+    w := Browser.w || Look.W, want := Browser.h || Round((bottom - top) * 0.5)
     onLeft := InStr(Settings.Corner, "left")
     below := bottom - (Anim.baseY + Anim.h + gap), above := Anim.baseY - gap - top
     side := Browser.side
@@ -3190,7 +3364,7 @@ BrowserSpot() {
             side := "beside"
         Browser.side := side
     }
-    x := onLeft ? Anim.baseX : Anim.baseX + Look.W - w
+    x := Anim.baseX + (Look.W - w) // 2
     switch side {
         case "below": h := Max(least, Min(want, below)), y := Anim.baseY + Anim.h + gap
         case "above": h := Max(least, Min(want, above)), y := Anim.baseY - gap - h
@@ -3207,29 +3381,34 @@ MoveBrowser() {
     static checkedAt := 0
     if (A_TickCount - checkedAt > 500) {
         checkedAt := A_TickCount
-        if !WinExist(Browser.hwnd)
+        if !PageOpen()
             return ClosePage()
-        Browser.min := WinGetMinMax(Browser.hwnd) != 0   ; down on the taskbar, or made full screen
+        page := Browser.hwnd   ; minimized, made full screen, or out of sight (tucked into its tab, or with the box)
+        Browser.min := DllCall("IsIconic", "ptr", page) || DllCall("IsZoomed", "ptr", page) || !DllCall("IsWindowVisible", "ptr", page)
     }
-    if Browser.min
+    if (Browser.min || Browser.detached)   ; (moved off the box: it stays where you put it)
         return
     spot := BrowserSpot(), set := Browser.set
     if (set && spot.x = set.x && spot.y = set.y && spot.w = set.w && spot.h = set.h)
         return
     sized := set && spot.w = set.w && spot.h = set.h
-    Browser.set := spot
+    Browser.set := spot, edges := Browser.inset || PageInsets()   ; (its window is bigger by its invisible border)
     ; SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS, and SWP_NOSIZE if it's only moving
-    DllCall("SetWindowPos", "ptr", Browser.hwnd, "ptr", 0, "int", spot.x, "int", spot.y, "int", spot.w, "int", spot.h, "uint", 0x4014 | (sized ? 1 : 0))
+    DllCall("SetWindowPos", "ptr", Browser.hwnd, "ptr", 0, "int", spot.x - edges.l, "int", spot.y - edges.t,
+        "int", spot.w + edges.l + edges.r, "int", spot.h + edges.t + edges.b, "uint", 0x4014 | (sized ? 1 : 0))
 }
 
 ; Notices you moving or resizing the page yourself, by its title bar or its edges (see PageMoved).
 WatchPage() {
-    static callback := CallbackCreate(PageMoved, "F", 7)
+    static callback := CallbackCreate(PageMoved, "F", 7), onEvent := CallbackCreate(PageEvent, "F", 7)
     Browser.hook := DllCall("SetWinEventHook", "uint", 0x800B, "uint", 0x800B, "ptr", 0, "ptr", callback,
         "uint", WinGetPID(Browser.hwnd), "uint", 0, "uint", 0, "ptr")   ; EVENT_OBJECT_LOCATIONCHANGE, from Edge
+    Browser.hook2 := DllCall("SetWinEventHook", "uint", 0x000B, "uint", 0x0016, "ptr", 0, "ptr", onEvent,
+        "uint", WinGetPID(Browser.hwnd), "uint", 0, "uint", 0, "ptr")   ; EVENT_SYSTEM_MOVESIZEEND to MINIMIZESTART, from Edge
 }
 
-; You moved the page (or resized it): the box follows it, so they stay together, and the page keeps
+; You moved the page (or resized it): it comes off the box and stays where you put it, out of the
+; way (let go of it near its place by the box and it snaps back on, see PageDropped), and it keeps
 ; the size you gave it.
 PageMoved(hook, event, hwnd, idObject, idChild, thread, time) {
     if (hwnd != Browser.hwnd || idObject != 0 || !Browser.set || Drag.mode || Browser.min)
@@ -3241,20 +3420,70 @@ PageMoved(hook, event, hwnd, idObject, idChild, thread, time) {
     } catch {
         return
     }
+    edges := Browser.inset || PageInsets()   ; (its visible edges, inside its invisible border)
+    x += edges.l, y += edges.t, w -= edges.l + edges.r, h -= edges.t + edges.b
     set := Browser.set
     if (Abs(x - set.x) <= 2 && Abs(y - set.y) <= 2 && Abs(w - set.w) <= 2 && Abs(h - set.h) <= 2)
         return   ; where the box put it
     if (Abs(w - set.w) > 2 || Abs(h - set.h) > 2)
         Browser.w := w, Browser.h := h
     Browser.set := {x: x, y: y, w: w, h: h}
-    gap := Round(8 * Look.s), onLeft := InStr(Settings.Corner, "left")
-    switch Browser.side {
-        case "below": bx := onLeft ? x : x + w - Look.W, by := y - gap - Anim.h
-        case "above": bx := onLeft ? x : x + w - Look.W, by := y + h + gap
-        default: bx := onLeft ? x - gap - Look.W : x + w + gap, by := y
+    if !Browser.detached
+        Browser.detached := true, SetTimer(UpdateVisibility, -1)
+    ; Near its place on the box, an outline shows where it'll snap back on when you let go.
+    spot := BrowserSpot()
+    ShowSnapSpot(Abs(x - spot.x) + Abs(y - spot.y) <= SnapZone() ? spot : "")
+    SetTimer(WatchPageDrag, 30)
+}
+
+; How near its place on the box (across and down, added up) the page has to be let go of to snap back on.
+SnapZone() => 110 * Look.s
+
+; While you're dragging the page: once you let go of the mouse button, it snaps back on or stays.
+WatchPageDrag() {
+    if GetKeyState("LButton", "P")
+        return
+    SetTimer(WatchPageDrag, 0)
+    ShowSnapSpot("")
+    PageDropped()
+}
+
+; The outline showing where the page will snap back on (spot, its visible edges), in Claude's color,
+; or "" to hide it.
+ShowSnapSpot(spot) {
+    global SnapGui, SnapCanvas, Canvas
+    static shown := ""
+    if !spot {
+        if (SnapGui && shown != "")
+            DllCall("ShowWindow", "ptr", SnapGui.Hwnd, "int", 0), shown := ""
+        return
     }
-    PlaceBoxAt(bx, by)
-    SetTimer(SaveSettings, -1000)
+    key := spot.x "," spot.y "," spot.w "," spot.h
+    if (key = shown)
+        return
+    if !SnapGui
+        SnapGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +E0x80000 +E0x20 +E0x08000000")   ; see-through, and clicks go through it
+    if (!SnapCanvas || SnapCanvas.w != spot.w || SnapCanvas.h != spot.h) {
+        if SnapCanvas
+            FreeCanvas(SnapCanvas)
+        SnapCanvas := MakeCanvas(spot.w, spot.h)
+    }
+    s := Look.s, c := Look.colors, r := 10 * s
+    saved := Canvas, Canvas := SnapCanvas   ; (the drawing helpers draw on Canvas)
+    DllCall("gdiplus\GdipGraphicsClear", "ptr", Canvas.g, "uint", 0)
+    FillRoundRect(1, 1, spot.w - 2, spot.h - 2, r, ARGB(0.14, c.claude))
+    path := RoundedPath(1.5 * s, 1.5 * s, spot.w - 3 * s, spot.h - 3 * s, r)
+    DllCall("gdiplus\GdipCreatePen1", "uint", ARGB(0.75, c.claude), "float", 2 * s, "int", 2, "ptr*", &pen := 0)
+    DllCall("gdiplus\GdipDrawPath", "ptr", Canvas.g, "ptr", pen, "ptr", path)
+    DllCall("gdiplus\GdipDeletePen", "ptr", pen), DllCall("gdiplus\GdipDeletePath", "ptr", path)
+    Canvas := saved
+    pt := Buffer(8), size := Buffer(8), origin := Buffer(8, 0)
+    NumPut("int", spot.x, "int", spot.y, pt), NumPut("int", spot.w, "int", spot.h, size)
+    DllCall("UpdateLayeredWindow", "ptr", SnapGui.Hwnd, "ptr", 0, "ptr", pt, "ptr", size, "ptr", SnapCanvas.hdc,
+        "ptr", origin, "uint", 0, "uint*", 255 << 16 | 1 << 24, "uint", 2)
+    if (shown = "")
+        DllCall("ShowWindow", "ptr", SnapGui.Hwnd, "int", 8)   ; SW_SHOWNA
+    shown := key
 }
 
 ; Moves the box so its window's top left is at x, y (as how far that is from its place in its corner).
@@ -4188,7 +4417,7 @@ ApplySettings() {
         if Look.iconFont {
             icon := Ink(Look.iconFont, Look.messageGlyph)
             Look.iconDy := (Look.labelH - icon.h) / 2 - icon.top
-            for name, glyph in Map("chat", Chr(0xE8BD), "code", Chr(0xE943), "mic", Chr(0xE720), "menu", Chr(0xE700), "link", Chr(0xE71B),
+            for name, glyph in Map("chat", Chr(0xE8BD), "code", Chr(0xE943), "mic", Chr(0xE720), "menu", Chr(0xE700), "link", Chr(0xE71B), "page", Chr(0xE774),
                     "speaker", Chr(0xE767)) {
                 icon := Ink(Look.iconFont, glyph)
                 Look.icons[name] := {glyph: glyph, dy: (Look.labelH - icon.h) / 2 - icon.top, w: TextWidth(glyph, Look.iconFont)}
@@ -4213,17 +4442,13 @@ ApplySettings() {
     Look.W := Round(Settings.Width * s), Look.inner := Look.W - 2 * Look.pad
     ; The tabs on top of the box: from its left, ☰, then Chat and Cowork, then Code; or, with the box
     ; on the left of the screen, the other way round from its right, so ☰ is toward the middle.
-    Look.mirror := InStr(Settings.Corner, "left") > 0
-    Look.slots := Map(), x := Look.radius + 8 * s
-    for which in ["menu", "chat", "code"] {
-        w := TabWidth(which)
-        Look.slots[which] := Look.mirror ? {left: Look.W - x - w, right: Look.W - x} : {left: x, right: x + w}
-        x += w + 4 * s
-    }
+    Look.mirror := InStr(Settings.Corner, "left") > 0, Look.compact := false
+    TabSlots()
     ; The cog and the – that tucks the box away: level with the tabs, at the other end from them.
     Look.cogR := 11 * s, Look.cogY := -Look.tabH / 2 + s
     Look.cogX := Look.mirror ? Look.pad + Look.cogR : Look.W - Look.pad - Look.cogR
     Look.miniX := Look.mirror ? Look.cogX + 2 * Look.cogR + 6 * s : Look.cogX - 2 * Look.cogR - 6 * s
+    PlacePageTab()   ; (the page's, while it's tucked away)
     Look.colors := Colors()
     Look.motion := Motion()
     ; The tab, and the box at its tallest (with the strip for a name, the row of links and the typing box).
@@ -4459,7 +4684,7 @@ Draw() {
         SetTimer(TrimMemory, -5000)
         global Opened := false
         if (Anim.hot != "")
-            Anim.hot := "", ClickThrough(true)
+            Anim.hot := "", Anim.through := true, ClickThrough(true)
     }
     DrawPanel(enter.alpha)
     DrawPeek()
@@ -4737,9 +4962,10 @@ DrawNewBadge(ex) {
 ; the tabs are the other way round), or "" if it doesn't fit.
 TabRoom(w) {
     gap := 8 * Look.s, controls := 4 * Look.cogR + 14 * Look.s   ; (the cog and – are at the end)
+    last := Look.slots.Has("page") ? Look.slots["page"] : Look.slots["code"]   ; (the tucked-away page's tab, if it's there)
     if Look.mirror
-        return Look.slots["code"].left - gap - Look.pad - controls >= w ? Look.pad + controls : ""
-    return Look.W - Look.pad - controls - Look.slots["code"].right - gap >= w ? Look.W - Look.pad - controls - w : ""
+        return last.left - gap - Look.pad - controls >= w ? Look.pad + controls : ""
+    return Look.W - Look.pad - controls - last.right - gap >= w ? Look.W - Look.pad - controls - w : ""
 }
 
 ; While voice mode is on, what it's doing, in a pill level with the tabs on the right, in voice
@@ -5044,7 +5270,7 @@ TabShape() {
     return {left: Anim.tabLeft, right: Anim.tabRight, top: 0.5 - Look.tabH}
 }
 
-TabLabel(which) => which = "chat" ? "CHAT & COWORK" : "CODE"
+TabLabel(which) => which = "chat" ? "CHAT & COWORK" : which = "code" ? "CODE" : StrUpper(LinkSite(Browser.url))
 
 ; The color of the page Claude is on: blue for Code, Claude's orange for Chat and Cowork.
 PageColor() => Page = "code" ? Look.colors.you : Look.colors.claude
@@ -5063,6 +5289,7 @@ Darker(rgb, some) => Round((rgb >> 16 & 0xFF) * (1 - some)) << 16 | Round((rgb >
 
 ; How wide a tab is: ☰, or a page's icon and name, with room around them.
 TabWidth(which) => which = "menu" ? 24 * Look.s + (Look.icons.Has("menu") ? Look.icons["menu"].w : TextWidth("≡", Look.labelFont))
+    : Look.compact && which != "page" && Look.icons.Has(which) ? 24 * Look.s + Look.icons[which].w   ; (just its icon)
     : 23 * Look.s + (Look.icons.Has(which) ? Look.icons[which].w + 6 * Look.s : 0) + TextWidth(TabLabel(which), Look.labelFont)
 
 ; The tabs that aren't joined to the box (☰, and the page Claude isn't on): softer and a little
@@ -5096,13 +5323,20 @@ DrawTabs(shadow) {
             }
             continue
         }
+        if (Look.compact && which != "page" && Look.icons.Has(which)) {   ; just its icon, in the middle (see PlacePageTab)
+            icon := Look.icons[which]
+            DrawWord(icon.glyph, Look.iconFont, slot.left + (slot.right - slot.left - icon.w) / 2, rowTop + icon.dy, Min(1, a + 0.1),
+                which = "chat" ? Look.colors.claude : Look.colors.you, shadow)
+            continue
+        }
         x := slot.left + 11 * s
         if Look.icons.Has(which) {
             icon := Look.icons[which]
-            DrawWord(icon.glyph, Look.iconFont, x, rowTop + icon.dy, Min(1, a + 0.1), which = "chat" ? Look.colors.claude : Look.colors.you, shadow)
+            DrawWord(icon.glyph, Look.iconFont, x, rowTop + icon.dy, Min(1, a + 0.1),
+                which = "chat" ? Look.colors.claude : which = "code" ? Look.colors.you : Look.colors.text, shadow)
             x += icon.w + 6 * s
         }
-        DrawWord(TabLabel(which), Look.labelFont, x, rowTop + Look.labelDy, a, Look.colors.text, shadow)
+        DrawWord(FitWidth(TabLabel(which), Look.labelFont, slot.right - x - 10 * s), Look.labelFont, x, rowTop + Look.labelDy, a, Look.colors.text, shadow)
     }
 }
 
@@ -6374,12 +6608,11 @@ ToggleHidden(itemName, *) {
     if !Hidden
         Shown := {you: "", claude: "", live: false, streaming: false, thinking: false, work: ""}   ; show the current exchange again
     UpdateVisibility()
-    ; The page open under the box goes down to the taskbar while it's hidden, and comes back after.
-    if (Browser.hwnd && WinExist(Browser.hwnd)) {
-        if Hidden {
-            try WinMinimize(Browser.hwnd), Browser.min := true
-        } else if (!Minimized && WinGetMinMax(Browser.hwnd) = -1) {
-            try WinRestore(Browser.hwnd), Browser.min := false, Browser.set := ""
-        }
+    ; The page open under the box goes out of sight while it's hidden, and comes back after.
+    if PageOpen() {
+        if Hidden
+            DllCall("ShowWindow", "ptr", Browser.hwnd, "int", 0), Browser.min := true   ; SW_HIDE
+        else if (!Minimized && !Browser.tucked)
+            BringPageBack()
     }
 }
