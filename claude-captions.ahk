@@ -131,7 +131,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.6.2"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.6.3"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -157,6 +157,8 @@ BUBBLES        := false         ; on the Chat page, what you say sits in a bubbl
 GLOW_DELAY     := 250           ; how long after Claude's sound the glow follows it (ms): the sound takes a moment to reach your ears
 FLOAT_BOX      := false         ; the box drifts gently, and leans a little toward the mouse
 HIGH_FPS       := false         ; draw as often as the screen refreshes (144 times a second on a 144 Hz screen), not 60
+GAME_MODE      := true          ; while a game (or anything full screen) is in front, the box keeps still and draws only when
+                                ; something changes, at most 60 times a second, and the Claude tab hides (see Gaming)
 TYPING_SOUND   := "Off"         ; little sounds as Claude's words appear: "Off", "Soft clicks", "Animal Crossing" or "Undertale"
 SOUND_VOLUME   := 40            ; how loud those are, from 0 to 100
 TEXT_REVEAL    := "Match the sound"   ; how Claude's words appear: "Fade in" (a word at a time), "Letter by letter", or
@@ -194,6 +196,7 @@ PANEL_ROWS     := 12            ; how many sessions or chats the list beside the
 SIDEBAR_ROW    := "w-full shrink-0 border-none text-left"   ; how a session or chat in Claude's sidebar starts its class
 SETTINGS_FILE  := A_ScriptDir "\claude-captions.ini"
 TIMES_FILE     := A_ScriptDir "\claude-captions-times.txt"   ; when each message the box saw was sent and replied to (see NoteTime)
+FOCUS_LOG      := A_ScriptDir "\claude-captions-log.txt"     ; when a game (or anything full screen) lost the foreground, and to what (see WatchForeground)
 ; -----------------------------------------------------------------------------
 
 THEMES := ["Dark", "Light", "Match Windows", "Midnight", "Ocean", "Forest", "Sunset", "Paper", "Rosé", "Mono", "Custom"]
@@ -315,18 +318,35 @@ Started := A_TickCount          ; when captions started, so the conversation alr
 SettledAt := 0                  ; until when what Claude's window shows counts as already there (after going to another conversation)
 SettingsGui := "", SetUI := ""   ; the settings window, and how it's doing (see OpenSettings)
 Times := Map()                  ; when your messages were sent and replied to, by their words (see GiveTimes)
+GameFront := false              ; a game (or anything full screen) is in front (see Gaming)
 
 if (A_LineFile = A_ScriptFullPath)
     CaptionsMain()
 
 CaptionsMain() {
+    ; Started again by itself with UI Access (see below): it's the copy that stays on.
+    relaunched := A_Args.Length && A_Args[1] = "uia"
     ; Running it again while it's already on turns it off (or an earlier version you switched to).
-    if ((running := OtherCaptions()) || (running := OlderCaptions())) {
+    if (!relaunched && ((running := OtherCaptions()) || (running := OlderCaptions()))) {
         WinClose(running)   ; asks the running copy to exit
         ToolTip("Captions are off")
         Sleep 2000
         ExitApp
     }
+    ; Over games and other full-screen windows: AutoHotkey's UI Access version (installed with it, as
+    ; AutoHotkey64_UIA.exe) puts the box's windows in the layer Windows keeps above everything else,
+    ; like the on-screen keyboard's, so the box shows over a game instead of the game covering it. So
+    ; captions start themselves again with it, if it's there (and just carry on without it if not).
+    uiaExe := RegExReplace(A_AhkPath, "i)(?<!_UIA)\.exe$", "_UIA.exe")
+    if (!relaunched && !HasUIAccess() && uiaExe != A_AhkPath && FileExist(uiaExe)) {
+        try {
+            Run('"' uiaExe '" "' A_ScriptFullPath '" uia', A_ScriptDir)
+            ExitApp
+        }
+    }
+    ; Other scripts (and turning captions off) can still reach a copy running with UI Access.
+    DllCall("ChangeWindowMessageFilter", "uint", 0x10, "uint", 1)   ; WM_CLOSE, MSGFLT_ADD
+    DllCall("ChangeWindowMessageFilter", "uint", DllCall("RegisterWindowMessage", "str", "ClaudeCaptions.HeyClaude", "uint"), "uint", 1)
     Persistent
     ; Each monitor's own scaling (like 150% on a 4K screen), so the box is sharp on any of them rather
     ; than stretched by Windows (see MonitorDpi).
@@ -357,6 +377,7 @@ CaptionsMain() {
     SetTimer(UpdateCaptions, CHECK_EVERY_MS)
     UpdateCaptions()
     LoadNotedTimes()
+    WatchForeground()
     SetTimer(ReadTranscripts, -2000)   ; when older messages were sent, for scrolling back
     ; If there's no conversation to show, a note says captions are on. It waits a moment, since
     ; Claude's window can take a read or two to answer.
@@ -392,6 +413,7 @@ ClearNote() {
 GoAway(*) {
     MuteClaude(true)
     try StopReading()
+    GuardGame(false)
     if (Browser.hwnd && WinExist(Browser.hwnd))
         try WinClose(Browser.hwnd)
     if !Anim.shown
@@ -402,6 +424,67 @@ GoAway(*) {
         Frame()
         Sleep 15
     }
+}
+
+; Game mode: while a game (or anything else full screen, like a video) is in front, the box keeps
+; still (no floating), draws only when something changes and at most 60 times a second, and the
+; Claude tab hides unless you tucked the box away yourself. A window drawn on top of a game makes
+; Windows blend the two every frame, which can make the game stutter (and upset its overlays, like
+; MSI Afterburner's or ReShade's), so the box does as little of that as it can.
+Gaming() => Settings.GameMode && GameFront
+
+CheckGameFront() {
+    global GameFront
+    front := false
+    try front := CoversScreen(WinExist("A"))   ; (see claude-voice-on-off-send.ahk)
+    if (front != GameFront) {
+        GameFront := front
+        Kick()
+        UpdateVisibility()
+    }
+    GuardGame(Gaming())
+}
+
+; While a game is in front (in Game mode), other programs can't take the front from it. Claude's
+; app brings its own window forward when its dictation starts or stops, and even a moment out of
+; the game drops the keys you're holding and lets go of the mouse. Windows' own foreground lock
+; stops that. You switching windows yourself (Alt+Tab, a click, the Windows key) still works, and
+; lets go of the lock; it's taken again at the next check while the game is in front, and let go
+; of as soon as the game isn't (or captions turn off).
+GuardGame(on) {
+    static locked := false
+    if (on || locked)
+        DllCall("LockSetForegroundWindow", "uint", on ? 1 : 2), locked := on   ; LSFW_LOCK, LSFW_UNLOCK
+}
+
+; Whether this copy is running with UI Access (see CaptionsMain).
+HasUIAccess() {
+    if !DllCall("advapi32\OpenProcessToken", "ptr", DllCall("GetCurrentProcess", "ptr"), "uint", 0x8, "ptr*", &token := 0)   ; TOKEN_QUERY
+        return false
+    ok := DllCall("advapi32\GetTokenInformation", "ptr", token, "int", 26, "uint*", &ui := 0, "uint", 4, "uint*", &size := 0)   ; TokenUIAccess
+    DllCall("CloseHandle", "ptr", token)
+    return ok && ui
+}
+
+; Notes in FOCUS_LOG whenever a game (or anything else full screen) loses the foreground, and what
+; took it, so if a game ever drops to the desktop it's clear what did it. The box's own windows
+; never take it (they're made so they can't).
+WatchForeground() {
+    static callback := CallbackCreate(ForegroundChanged, "F", 7)
+    DllCall("SetWinEventHook", "uint", 3, "uint", 3, "ptr", 0, "ptr", callback, "uint", 0, "uint", 0, "uint", 0, "ptr")   ; EVENT_SYSTEM_FOREGROUND
+}
+
+ForegroundChanged(hook, event, hwnd, idObject, idChild, thread, time) {
+    static last := 0, lastFull := false, lastName := ""
+    SetTimer(CheckGameFront, -1)
+    full := false, name := "?"
+    try {
+        name := WinGetProcessName(hwnd) " '" SubStr(WinGetTitle(hwnd), 1, 60) "'"
+        full := CoversScreen(hwnd)   ; (see claude-voice-on-off-send.ahk)
+    }
+    if (lastFull && hwnd != last)
+        try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") "  " lastName " (full screen) lost the foreground to " name "`n", FOCUS_LOG, "UTF-8")
+    last := hwnd, lastFull := full, lastName := name
 }
 
 ; The window of another copy of this script that's already running, if there is one.
@@ -420,6 +503,7 @@ UpdateCaptions() {
     global Shown, LastChange, LastHwnd, Reads, Listening, Waiting, VoiceModeAt, VoiceMode, VoiceMicLive, PageAt, Sessions
     if (Mod(++Reads, 5) = 0)
         CheckWindowsColors()
+    CheckGameFront()
     if (Browser.hwnd && !WinExist(Browser.hwnd))   ; you closed the page under the box
         ClosePage()
     if Hidden
@@ -1974,10 +2058,19 @@ UpdateVisibility() {
         if (show && !Anim.p) {   ; coming back from hidden
             SnapView()
             ReplayWords()
+            OnTop()
         }
         Anim.target := show
         Kick()
     }
+}
+
+; Puts the box and its tab back on top of other always-on-top windows (a game going full screen can
+; put its own window above them), without taking the keyboard.
+OnTop() {
+    for gui in [BoxGui, PeekGui]
+        if gui
+            DllCall("SetWindowPos", "ptr", gui.Hwnd, "ptr", -1, "int", 0, "int", 0, "int", 0, "int", 0, "uint", 0x13)   ; HWND_TOPMOST; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
 }
 
 ; As the box shows up, the words showing in it flow in again one after another, top to bottom,
@@ -2300,7 +2393,7 @@ MonitorDpi(n) {
 ; (checked now and then), and 60 times a second otherwise.
 FramePeriod() {
     static hz := 60, checkedAt := -60000
-    if !Settings.HighFps
+    if (!Settings.HighFps || Gaming())
         return 16
     if (A_TickCount - checkedAt > 10000) {
         checkedAt := A_TickCount, mode := Buffer(220, 0)   ; DEVMODEW
@@ -2696,7 +2789,7 @@ DemoVoice() {
 
 ; Whether the box goes into a tab with Claude's logo at the edge of the screen when it hides: when
 ; you tucked it away yourself, or when Tuck is on, so you can always bring it back.
-PeekWanted() => !Hidden && (Minimized || Settings.Tuck)
+PeekWanted() => !Hidden && (Minimized || Settings.Tuck && !Gaming())
 
 ; How long tucking away (or, opening, coming back out) takes in the style picked, in ms.
 TuckMs(opening) {
@@ -3928,7 +4021,7 @@ Frame() {
         || now - Anim.jiggleAt < 700 || now - Current.doneAt < 600 || now - Anim.spinAt < 900 || Anim.peek > 0 && ClaudeBusy()
     ; With Float on, the box drifts gently (see Draw), leaning a little toward the mouse when it's
     ; near, but not while you're pointing at it or dragging it.
-    floating := Settings.Float && smooth && Anim.target && !Drag.mode
+    floating := Settings.Float && smooth && Anim.target && !Drag.mode && !Gaming()
     if floating {
         CoordMode("Mouse", "Screen")
         MouseGetPos(&mx, &my)
@@ -5330,7 +5423,7 @@ DefaultSettings() => {Font: FONT, FontSize: FONT_SIZE, Theme: THEME, Background:
     TypingSound: TYPING_SOUND, CustomColors: CUSTOM_COLORS, Tuck: TUCK ? 1 : 0, TuckCount: TUCK_COUNT ? 1 : 0,
     TuckWiggle: TUCK_WIGGLE ? 1 : 0, AutoLinks: AUTO_LINKS ? 1 : 0, TuckStyle: TUCK_STYLE, SoundVolume: SOUND_VOLUME,
     TextReveal: TEXT_REVEAL, TypeBox: TYPE_BOX ? 1 : 0, ClaudeVoice: CLAUDE_VOICE ? 1 : 0, ReadCode: READ_CODE ? 1 : 0,
-    ReadVoice: READ_VOICE, ReadSpeed: READ_SPEED, HighFps: HIGH_FPS ? 1 : 0, OffsetX: 0, OffsetY: 0, PeekEdge: "", PeekAt: -1, Monitor: 0}
+    ReadVoice: READ_VOICE, ReadSpeed: READ_SPEED, HighFps: HIGH_FPS ? 1 : 0, GameMode: GAME_MODE ? 1 : 0, OffsetX: 0, OffsetY: 0, PeekEdge: "", PeekAt: -1, Monitor: 0}
 
 LoadSettings() {
     global Settings
@@ -5483,6 +5576,8 @@ SettingRows() {
             help: "Draws the box as often as your screen refreshes (like 144 times a second on a 144 Hz screen), for the smoothest motion. Off, it's 60 times a second, which is lighter on your computer."},
         {tab: 4, key: "Float", name: "Float", kind: "toggle", when: () => Settings.Animate,
             help: "The box drifts gently, and leans a little toward the mouse. What's attached to it (a page open under it, the list beside it) and its tab at the edge of the screen stay still."},
+        {tab: 4, key: "GameMode", name: "Game mode", kind: "toggle",
+            help: "While a game (or anything else full screen, like a video) is in front, the box keeps still, only redraws when something changes (at most 60 times a second), and the Claude tab hides unless you tucked the box away yourself. Easier on the game and its overlays."},
         {tab: 4, key: "ScrollSmooth", name: "Scroll glide", kind: "slider", low: 1, high: 10, show: v => glides[v], when: () => Settings.Animate,
             help: "How long scrolling back through the conversation glides before it stops."},
         {tab: 4, key: "Appear", name: "Show & hide", kind: "choice", list: APPEAR_STYLES, when: () => Settings.Animate,
@@ -6081,7 +6176,7 @@ RunVersion(name) {
     if !FileExist(dir "\claude-captions.ahk")
         return
     try FileCopy(SETTINGS_FILE, dir "\claude-captions.ini", true)
-    Run('"' A_AhkPath '" "' dir '\claude-captions.ahk"', dir)
+    Run('"' RegExReplace(A_AhkPath, "i)_UIA(?=\.exe$)") '" "' dir '\claude-captions.ahk"', dir)   ; (as usual, not with UI Access: it wouldn't hear turning it off)
     ExitApp
 }
 
@@ -6134,7 +6229,7 @@ ChangeSetting(key, value, save := true) {
     if save
         SaveSettings()
     if HasValue(["SoundVolume", "ReadCode", "ReadVoice", "ReadSpeed", "ClaudeVoice", "AutoLinks", "TuckCount", "TuckWiggle", "Tuck",
-            "TuckStyle", "HideAfter", "TypingSound", "TextReveal", "GlowDelay", "FollowVoice", "Float", "HighFps"], key)
+            "TuckStyle", "HideAfter", "TypingSound", "TextReveal", "GlowDelay", "FollowVoice", "Float", "HighFps", "GameMode"], key)
         Kick(), UpdateVisibility()
     else
         ApplySettings()

@@ -552,8 +552,13 @@ EndVoiceFromGoodbye() {
     try {
         hwnd := FindClaudeWindow()
         if (hwnd && OnChatPage(hwnd) && VoiceIsOn(hwnd)) {
-            WinActivate(hwnd)
-            WinWaitActive(hwnd, , 2)
+            ; (from behind a game, Claude isn't brought to the front: see OpenClaude)
+            global CameFrom, Behind, ClaudeHwnd
+            CameFrom := WinExist("A"), Behind := CameFrom && CameFrom != hwnd && CoversScreen(CameFrom), ClaudeHwnd := hwnd
+            if !Behind {
+                WinActivate(hwnd)
+                WinWaitActive(hwnd, , 2)
+            }
             StopVoice(hwnd)
             HeyLog("Ended voice mode")
         } else {
