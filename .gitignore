@@ -1,5 +1,9 @@
 # Personal files the scripts create next to themselves: logs (they include message text),
-# settings tuned to your voice and mic, and your "Teach it my voice" recordings.
+# settings tuned to your voice and mic, your "Teach it my voice" recordings, the captions' notes of
+# when your messages were sent (they include your messages' words), and earlier caption versions
+# you've kept to switch back to.
 *-log.txt
 *.ini
+*-times.txt
 hey-claude-voice-samples/
+captions-versions/

@@ -26,15 +26,22 @@ unzip it, and follow [Setup](#setup).
   new messages, rocks while Claude works and spins when it's done.
 - **Scroll back** through the conversation with the real time of each message, switch between
   Chat & Cowork and Code, and open any chat or session from the **☰** list.
-- **Links** in Claude's replies open in a page attached right under the box.
+- **Links** in Claude's replies open in a page attached right under the box, lined up with it.
+  Minimize the page and it tucks into a tab of its own on the box; drag it anywhere out of the way,
+  and drop it back on its outline to snap it on again.
 - **Extras:** Code replies read out loud, typing sounds (soft clicks, Animal Crossing or Undertale
   style), text that types itself out letter by letter.
 - **Make it yours:** themes or your own colors, any font and size, a see-through background,
   animations, a gently floating box, High FPS, and any monitor at any scaling (4K included).
+- **Made for gaming:** it shows over full-screen games (use the game's borderless mode), and
+  **Game mode** keeps it light while you play: it sits still, only redraws when something changes,
+  and stays out of the way of your other overlays.
 
 **"Hey Claude" wake word**
 - Say "Hey Claude" from anywhere to start voice mode (Chat page) or a dictated message that sends
   itself (Code page). No tabbing out, no clicking.
+- **In a game, you keep playing:** Claude works from behind it, so you never lose your mouse or the
+  keys you're holding.
 - Recognition runs offline on your PC, can be taught your voice, and ignores everyday look-alikes
   like "oh yeah", "okay cool" and "that was cool".
 
@@ -188,10 +195,29 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
   it and everything comes back. While it's tucked away, the logo rocks while Claude works, spins
   when it's done, and counts each new message (blue for Code, red for Chat & Cowork).
 - **Links:** when Claude's reply links to a website, small pills show at the bottom of the box
-  (like "youtube.com"). Click one to open the page in a window attached right under the box; click
-  it again to close it. Pages open in Microsoft Edge (or your usual browser if Edge isn't there).
+  (like "youtube.com"). Click one to open the page in a window attached right under the box, as
+  wide as the box and lined up with it; click it again to close it. Pages open in Microsoft Edge
+  (or your usual browser if Edge isn't there).
+  - **Minimize the page** and it doesn't go to the taskbar: it tucks into a tab on the box, with a
+    globe and the site's name (the Chat & Cowork and Code tabs go down to just their icons to make
+    room if they need to). Click that tab to bring the page back.
+  - **Drag the page** by its title bar to move it out of the way: it comes off the box and stays
+    where you put it. Drag it back near its place and an outline shows where it'll snap back on;
+    let go there and it does.
+  - **In a game**, the page opens without taking the front from the game, and stays on top of it.
 - Clicks go straight through the box to whatever is underneath (only its handles and tabs take
   clicks), and it never takes the keyboard from what you're typing in.
+- **Games:** the captions start themselves with AutoHotkey's UI Access version when it's installed
+  (the standard installer includes it), which lets the box show over full-screen games. Set games
+  to their **borderless** (windowed full screen) mode: in exclusive full screen, a game can drop to
+  the desktop when anything is drawn over it. In a game, pointing at the box shows the pointer over
+  it (once it's rested there a moment, so a game's hidden pointer drifting by doesn't count), and
+  the page tabs switch instantly. While a game is in front, **Game mode** keeps the box
+  still and light, hides the Claude tab until there's something new, and stops other programs from
+  pulling themselves in front of the game.
+- **"Hey Claude" in a game:** it notices the game and works from behind it, clicking Claude's
+  buttons without bringing Claude to the front, so the game keeps your mouse and the keys you're
+  holding.
 
 ## Settings
 
@@ -208,7 +234,7 @@ Each script has a Settings block near the top. The most useful ones:
 | Hey Claude | `LOOK_ALIKES` | Phrases "Hey Claude" must beat. Add any word that keeps setting it off |
 | Hey Claude | `VOICE_IDLE_MS` | How long voice mode can sit on "Listening" before it ends (5 s; 0 turns it off) |
 | voice + send | `MAX_TALK_MS` | Dictation sends itself after this long, even if it still hears noise (3 minutes) |
-| Captions | the **cog** on the box | A settings window with tabs (**LOOK**, **TEXT**, **SOUND**, **MOTION**, **BOX**, **TUCK & LINKS**); point at a **?** to see what a setting does. Font and size, colors (Dark, Light, Match Windows, themes like Midnight, Ocean, Forest, Sunset, Paper, Rosé and Mono, or your own with **Custom**, which keeps them readable and has a **Default** button), how see-through it is (down to just the words), corner, width and height, how Claude's words come in (fading in, or typed out letter by letter), their speed, scroll smoothness, how the box appears and tucks away, how long it stays up, whether words light up in voice mode, bubbles on the Chat page, a gently floating box, **High FPS** (drawn as often as your screen refreshes), typing sounds (soft clicks, Animal Crossing or Undertale style) and their volume, hearing Claude in voice mode, reading Code replies out loud (voice and speed), the typing box, the Claude tab's count and wiggle, and opening links by themselves. **Reset to defaults** puts it all back. Saved in `claude-captions.ini` |
+| Captions | the **cog** on the box | A settings window with tabs (**LOOK**, **TEXT**, **SOUND**, **MOTION**, **BOX**, **TUCK & LINKS**); point at a **?** to see what a setting does. Font and size, colors (Dark, Light, Match Windows, themes like Midnight, Ocean, Forest, Sunset, Paper, Rosé and Mono, or your own with **Custom**, which keeps them readable and has a **Default** button), how see-through it is (down to just the words), corner, width and height, how Claude's words come in (fading in, or typed out letter by letter), their speed, scroll smoothness, how the box appears and tucks away, how long it stays up, whether words light up in voice mode, bubbles on the Chat page, a gently floating box, **High FPS** (drawn as often as your screen refreshes), **Game mode** (light and still while a game is in front), typing sounds (soft clicks, Animal Crossing or Undertale style) and their volume, hearing Claude in voice mode, reading Code replies out loud (voice and speed), the typing box, the Claude tab's count and wiggle, and opening links by themselves. **Reset to defaults** puts it all back. Saved in `claude-captions.ini` |
 | Captions | the **version** by the title | Switch to an earlier version of the captions kept in a `captions-versions\<version>` folder next to the script. To come back, turn the captions off and on again |
 | Captions | **Glow timing** (same window) | If the lit-up word runs ahead of Claude's voice (common with sound mixers like Voicemeeter, or wireless headphones), slide it right |
 
@@ -225,7 +251,9 @@ Each script has a Settings block near the top. The most useful ones:
 - Log files are saved next to the scripts (`...-log.txt`). The voice + send log includes the text of
   messages it sent, and the "Hey Claude" log notes goodbyes. **Teach it my voice** saves your
   recordings in `hey-claude-voice-samples`. The captions keep `claude-captions-times.txt`, noting
-  when each message was sent by its words. Keep those to yourself; `.gitignore` leaves them out.
+  when each message was sent by its words, and `claude-captions-log.txt`, noting which program took
+  the front whenever a game (or anything full screen) lost it. Keep those to yourself; `.gitignore`
+  leaves them out.
 
 ## Troubleshooting
 
@@ -245,6 +273,11 @@ Each script has a Settings block near the top. The most useful ones:
 - **The captions' words are hard to read with your own colors:** click the cog, and on the
   **LOOK** tab click **Default** (twice) beside your colors, or **Reset to defaults** at the bottom
   for every setting.
+- **A game drops to the desktop, or the captions don't show over it:** switch the game to its
+  borderless (windowed full screen) mode. If a game ever loses the front, `claude-captions-log.txt`
+  says which program took it.
+- **The captions won't close from Task Manager:** running with UI Access, Windows protects them from
+  other programs. Turn them off the usual way: their button, shortcut, or **Exit** in the tray menu.
 - **The captions' box disappeared:** it may be tucked away. Look for the little Claude tab at the
   side of your screen and click it, or pick "Tuck the box into the side (or bring it back)" in its
   tray menu.

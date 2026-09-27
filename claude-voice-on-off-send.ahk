@@ -29,7 +29,9 @@
 ; ---- Settings ---------------------------------------------------------------
 SILENCE_MS     := 2000    ; end dictation after this much quiet (milliseconds)
 FIRST_WORDS_MS := 7000    ; end dictation if you haven't started talking within this long
-VOICE_LEVEL    := 0.02    ; mic level that counts as talking (0 to 1). Raise it if background noise keeps dictation going
+VOICE_LEVEL    := 0.02    ; mic level that counts as talking (0 to 1), at the least: talking also has to be well above
+                          ; the room's own noise (see WatchForSilence). Raise it if background noise keeps dictation going
+MAX_TALK_MS    := 180000  ; however it seems, stop dictation (and send what was said) after this long (milliseconds)
 BEEP_WHEN_READY := true   ; beep once dictation is listening, so you know when to talk
 KEEP_GOING_MS  := 1000    ; conversation mode: once Claude has finished replying, listen again this long after (ms). 0 = off (claude-hey-claude.ahk turns it off)
 NEXT_WORDS_MS  := 7000    ; in conversation mode, how long it waits for your next message before it stops listening
@@ -45,9 +47,16 @@ STATE_FILE := A_Temp "\claude-voice-on-off.ini"                 ; shared with cl
 ; -----------------------------------------------------------------------------
 
 ; UI Automation lets the script find Claude's buttons by their names instead of by screen position.
-UIA := ComObject("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+; If Claude's window stops answering for a moment, each request gives up after 4 seconds instead of
+; Windows' usual 20, so nothing hangs that long (like "Hey Claude" not hearing you meanwhile).
+UIA := ComObject("{e22ad333-b25f-460c-83d0-0581107395c9}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")   ; CUIAutomation8
+try ComCall(63, ComObjQuery(UIA, "{34723aff-0c9d-49d0-9896-7ab52df8cd8a}"), "uint", 4000)   ; IUIAutomation2 TransactionTimeout
 UIA_BUTTON := 50000, UIA_EDIT := 50004, UIA_RADIO := 50013, UIA_TEXT := 50020, UIA_GROUP := 50026
 LogLines := []
+CameFrom := 0      ; the window that was in front when the button started (see OpenClaude)
+Behind := false    ; ...a game (or anything else full screen): Claude works from behind it
+ClaudeHwnd := 0    ; Claude's window, for clicking its buttons from behind a game (see PostClick)
+FrontUntil := 0    ; ...until when the game is kept in front, if Claude takes it (see HoldGameInFront)
 
 if (A_LineFile = A_ScriptFullPath)
     Main()
@@ -58,17 +67,27 @@ Main() => RunVoiceButton(A_Args.Length && A_Args[1] = "start-only")
 ; dictation on, and leaves them alone if they're already on.
 RunVoiceButton(startOnly := false) {
     LogLines.Length := 0
+    Log("Starting")
     DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")   ; work in real screen pixels
     try {
         hwnd := OpenClaude()
+        Log("Claude is in front")
         ; Right after launch the page needs a moment to load.
         if !WaitFor(() => FindByPrefix(hwnd, UIA_RADIO, "Chat and Cowork"), 20000)
             throw Error("Couldn't read Claude's window. It may still be loading, so try the button again.")
 
         dictating := FindButton(hwnd, IsDictationStop)
         if (startOnly && dictating) {
-            Log("Dictation is already on")
-        } else if (!startOnly && !dictating && IniRead(STATE_FILE, "conversation", "active", 0) = 1) {
+            ; "Hey Claude" wants a new message, but dictation is still on: left on, or stuck finishing
+            ; one that went wrong (which used to leave "Hey Claude" doing nothing until it cleared).
+            ; It's stopped, and once Claude is ready again, started afresh below.
+            Log("Dictation was already on, so it's being stopped to start afresh")
+            PressButton(dictating.el)
+            if !WaitFor(() => FindButton(hwnd, n => n == "Dictate"), 6000)
+                throw Error("Claude's dictation seems stuck (it didn't stop). Click the mic in Claude's message box, then try again.")
+            dictating := ""
+        }
+        if (!startOnly && !dictating && IniRead(STATE_FILE, "conversation", "active", 0) = 1) {
             ; A "Hey Claude" conversation is pausing between messages; this press ends it.
             IniWrite(0, STATE_FILE, "conversation", "active")
             Log("Ended the conversation")
@@ -146,7 +165,7 @@ ToggleDictation(hwnd) {
                     return
                 }
                 if (text != "") {
-                    PressInMessageBox(hwnd, "{Enter}")
+                    SendPrompt(hwnd)
                     Log("Sent: " text)
                 }
                 if (KEEP_GOING_MS && EndsWithSignOff(text)) {
@@ -259,8 +278,13 @@ IsStopReplyButton(name) => name ~= "^Stop( response| generating)?$"
 StartDictation(hwnd, dictateBtn) {
     PressButton(dictateBtn.el)
     if !WaitFor(() => FindButton(hwnd, IsDictationStop), 3000) {
-        Log("Dictation didn't start from the button press, trying a real click")
-        ClickEl(dictateBtn.el, hwnd)
+        if Behind {
+            Log("Dictation didn't start from the click message, trying UI Automation")
+            UiaPress(dictateBtn.el)
+        } else {
+            Log("Dictation didn't start from the button press, trying a real click")
+            ClickEl(dictateBtn.el, hwnd)
+        }
         if !WaitFor(() => FindButton(hwnd, IsDictationStop), 3000)
             throw Error("Pressed 'Dictate' but dictation didn't start.")
     }
@@ -270,19 +294,33 @@ StartDictation(hwnd, dictateBtn) {
 }
 
 ; Ends dictation once you've been quiet for SILENCE_MS after talking, or if you haven't started
-; talking within firstWordsMs. Returns how it ended ("quiet", "no talking", or "stopped" when
-; something else ended it) and whether any talking was heard.
+; talking within firstWordsMs, or after MAX_TALK_MS whatever happens. Talking is what's louder than
+; VOICE_LEVEL and well above the room's own noise: the quietest moment of the last two seconds
+; (there are gaps between words even while you talk), so a noisy room (a fan, a video playing)
+; doesn't sound like talking that never ends. Returns how it ended ("quiet", "no talking", "too
+; long", or "stopped" when something else ended it) and whether any talking was heard.
 WatchForSilence(hwnd, firstWordsMs) {
     meter := OpenMicMeter()
     start := A_TickCount, lastVoice := 0, lastCheck := A_TickCount
-    quietMax := 0.0, voiceMax := 0.0
+    quietMax := 0.0, voiceMax := 0.0, recent := []
     loop {
         Sleep 100
         ComCall(3, meter, "float*", &level := 0)   ; GetPeakValue
-        if (level >= VOICE_LEVEL)
+        recent.Push(level)
+        if (recent.Length > 20)
+            recent.RemoveAt(1)
+        noise := level
+        for v in recent
+            noise := Min(noise, v)
+        if (level >= Max(VOICE_LEVEL, Min(0.15, noise * 2.5)))
             lastVoice := A_TickCount, voiceMax := Max(voiceMax, level)
         else
             quietMax := Max(quietMax, level)
+        if (A_TickCount - start >= MAX_TALK_MS) {
+            Log("Still hearing talking after " MAX_TALK_MS // 1000 " s, so dictation was stopped")
+            ended := "too long"
+            break
+        }
 
         if (lastVoice && A_TickCount - lastVoice >= SILENCE_MS) {
             Log("Quiet for " SILENCE_MS " ms after talking")
@@ -342,20 +380,46 @@ WaitForTranscript(hwnd, textBefore, timeoutMs) {
     }
 }
 
-; Brings Claude to the front, puts the cursor in the message box, and presses keys there.
+; Sends what's in the message box. From behind a game, it presses Claude's send button, which works
+; without bringing Claude up. Otherwise (or if there's no send button it knows, or pressing it
+; didn't send), it presses Enter in the message box.
+SendPrompt(hwnd) {
+    if Behind {
+        if (btn := FindButton(hwnd, IsSendButton)) {
+            PressButton(btn.el)
+            if WaitFor(() => PromptText(hwnd) = "", 2000) {
+                Log("Sent with '" btn.name "', from behind")
+                return
+            }
+            Log("Pressing '" btn.name "' didn't send it, so pressing Enter instead")
+        } else {
+            Log("No send button found, so pressing Enter. Buttons: " JoinNames(GetElements(hwnd, UIA_BUTTON)))
+        }
+    }
+    PressInMessageBox(hwnd, "{Enter}")
+}
+
+IsSendButton(name) => name ~= "i)^(send|send message|submit|send prompt)$"
+
+; Brings Claude to the front, puts the cursor in the message box, and presses keys there (and, from
+; behind a game, gives the game the front back straight after, see GiveBack).
 PressInMessageBox(hwnd, keys) {
     if !(box := PromptBox(hwnd))
         throw Error("Couldn't find Claude's message box, so no keys were pressed.")
-    if !WinActive(hwnd)
-        WinActivate hwnd
-    if !WinActive(hwnd)
-        throw Error("Couldn't bring Claude to the front. Anything you said is still in the message box.")
-    ComCall(3, box.el)   ; SetFocus
-    Sleep 100
-    ; Only press keys once the message box really has the cursor, so they can't land anywhere else.
-    if !HasFocus(box.el)
-        throw Error("Couldn't put the cursor in Claude's message box, so no keys were pressed.")
-    Send keys
+    try {
+        if !WinActive(hwnd)
+            WinActivate hwnd
+        if !WinActive(hwnd)
+            throw Error("Couldn't bring Claude to the front. Anything you said is still in the message box.")
+        ComCall(3, box.el)   ; SetFocus
+        Sleep 100
+        ; Only press keys once the message box really has the cursor, so they can't land anywhere else.
+        if !HasFocus(box.el)
+            throw Error("Couldn't put the cursor in Claude's message box, so no keys were pressed.")
+        Send keys
+    } finally {
+        GiveBack()
+    }
 }
 
 ; Claude's message box. It's picked by what it is rather than where it is on the page, because
@@ -407,7 +471,9 @@ IsDictationStop(name) => name == "Stop dictation" || name == "Finish dictation"
 StartVoice(hwnd, voiceBtn) {
     before := ButtonNames(hwnd)
     Sleep 400   ; let the chat finish settling before clicking
-    ClickEl(voiceBtn.el, hwnd)
+    ; From behind a game, pressing it without the mouse is tried first (a real click needs Claude in front).
+    if !(Behind && (PressButton(voiceBtn.el), WaitFor(() => FindButton(hwnd, IsVoiceModeControl) || !FindButton(hwnd, n => n == "Use voice mode"), 2500)))
+        ClickEl(voiceBtn.el, hwnd)
     Log("Clicked 'Use voice mode'")
     SaveState(true, hwnd, false)   ; saved right away in case the button is pressed again quickly
 
@@ -440,6 +506,7 @@ StopVoice(hwnd) {
         if (box := PromptBox(hwnd))
             try ComCall(3, box.el)   ; SetFocus
         Send "{Esc}"
+        GiveBack()
     } else {
         ; Esc ends voice mode in the chat box. Only press it on the Chat page:
         ; on the Code page, Esc would interrupt a running session.
@@ -455,6 +522,7 @@ StopVoice(hwnd) {
             throw Error("Couldn't bring Claude to the front to end voice mode.")
         Log("No end button found, pressing Esc")
         Send "{Esc}"
+        GiveBack()
     }
     SaveState(false)
 }
@@ -500,6 +568,44 @@ IsEndVoiceButton(name) {
         || name ~= "i)^(end|hang up)$"
 }
 
+; ---- Claude's sound -----------------------------------------------------------
+
+; Windows' level meters for the sound Claude's app is playing, one per sound stream it has open.
+ClaudeSoundMeters() {
+    meters := []
+    devices := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")   ; MMDeviceEnumerator
+    ComCall(3, devices, "int", 0, "uint", 1, "ptr*", &p := 0)   ; EnumAudioEndpoints(speakers, active)
+    speakers := ComPtr(p)
+    ComCall(3, speakers, "uint*", &count := 0)                  ; GetCount
+    loop count {
+        try {
+            ComCall(4, speakers, "uint", A_Index - 1, "ptr*", &p := 0)   ; Item
+            device := ComPtr(p)
+            ComCall(3, device, "ptr", Guid("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}"), "uint", 23, "ptr", 0, "ptr*", &p := 0)   ; Activate(IAudioSessionManager2)
+            manager := ComPtr(p)
+            ComCall(5, manager, "ptr*", &p := 0)                 ; GetSessionEnumerator
+            sessions := ComPtr(p)
+            ComCall(3, sessions, "int*", &n := 0)                ; GetCount
+            loop n {
+                try {
+                    ComCall(4, sessions, "int", A_Index - 1, "ptr*", &p := 0)   ; GetSession
+                    session := ComPtr(p)
+                    ComCall(14, ComObjQuery(session, "{bfb7ff88-7239-4fc9-8fa2-07c950be9c6d}"), "uint*", &pid := 0)   ; IAudioSessionControl2.GetProcessId
+                    if (ProcessGetName(pid) = "claude.exe")
+                        meters.Push(ComObjQuery(session, "{C02216F6-8C67-4B5B-9D00-D008E73E0064}"))   ; IAudioMeterInformation
+                }
+            }
+        }
+    }
+    return meters
+}
+
+Guid(text) {
+    buf := Buffer(16)
+    DllCall("ole32\CLSIDFromString", "wstr", text, "ptr", buf)
+    return buf
+}
+
 ; ---- Claude's window ----------------------------------------------------------
 
 FindClaudeWindow() {
@@ -514,19 +620,58 @@ FindClaudeWindow() {
     return best
 }
 
+; Gets Claude ready, and brings it to the front. But in a game (or anything else full screen, like a
+; video), Claude stays behind it: coming to the front would drop you out of the game, back to the
+; Windows cursor. Dictation works from behind; sending does too, with Claude's send button, or else
+; Claude comes up just long enough to press Enter (see SendPrompt, GiveBack).
 OpenClaude() {
+    global CameFrom, Behind, ClaudeHwnd
+    CameFrom := WinExist("A")
+    Behind := CameFrom && CoversScreen(CameFrom)
     if !(hwnd := FindClaudeWindow()) {
         Log("Claude isn't open, starting it")
         Run CLAUDE_APP
         if !(hwnd := WaitFor(FindClaudeWindow, 30000))
             throw Error("Claude didn't open within 30 seconds.")
     }
-    if (WinGetMinMax(hwnd) = -1)
-        WinRestore hwnd
-    WinActivate hwnd
-    WinWaitActive(hwnd, , 3)
+    if (hwnd = CameFrom)
+        Behind := false
+    ClaudeHwnd := hwnd
+    if Behind {
+        if (WinGetMinMax(hwnd) = -1)
+            DllCall("ShowWindow", "ptr", hwnd, "int", 4)   ; SW_SHOWNOACTIVATE: restored, but not in front
+        Log("A full-screen window is in front (" WinGetProcessName(CameFrom) "), so Claude stays behind it")
+    } else {
+        if (WinGetMinMax(hwnd) = -1)
+            WinRestore hwnd
+        WinActivate hwnd
+        if !WinWaitActive(hwnd, , 3)
+            Log("Claude didn't come to the front within 3 seconds")
+    }
     WakeAccessibility(hwnd)
     return hwnd
+}
+
+; Whether a window fills its whole monitor with no title bar, like a game or a full-screen video
+; (not just maximized, like an app on a monitor without the taskbar).
+CoversScreen(hwnd) {
+    try {
+        if (WinGetClass(hwnd) ~= "^(Progman|WorkerW|Shell_TrayWnd)$" || (WinGetStyle(hwnd) & 0xC00000) = 0xC00000   ; the desktop, the taskbar, or a window with a title bar
+            || WinGetMinMax(hwnd) != 0)
+            return false
+        WinGetPos(&x, &y, &w, &h, hwnd)
+        info := Buffer(40, 0), NumPut("uint", 40, info)
+        DllCall("GetMonitorInfo", "ptr", DllCall("MonitorFromWindow", "ptr", hwnd, "uint", 2, "ptr"), "ptr", info)   ; MONITOR_DEFAULTTONEAREST
+        return x <= NumGet(info, 4, "int") && y <= NumGet(info, 8, "int") && x + w >= NumGet(info, 12, "int") && y + h >= NumGet(info, 16, "int")
+    }
+    return false
+}
+
+; After something that needed Claude in front (a key press or a real click), the game goes straight
+; back in front, if Claude was working from behind it.
+GiveBack() {
+    if (Behind && CameFrom && WinExist(CameFrom) && !WinActive(CameFrom))
+        try WinActivate(CameFrom)
 }
 
 OnChatPage(hwnd) {
@@ -547,6 +692,8 @@ WakeAccessibility(hwnd) {
 
 ; Clicks an element with the real mouse, like a person would, then puts the mouse back.
 ClickEl(el, hwnd) {
+    if (Behind && PostClick(el, hwnd))
+        return
     rect := Buffer(16, 0)
     ComCall(43, el, "ptr", rect)   ; CurrentBoundingRectangle
     left := NumGet(rect, 0, "int"), top := NumGet(rect, 4, "int")
@@ -560,6 +707,7 @@ ClickEl(el, hwnd) {
     MouseGetPos &mouseX, &mouseY
     Click x, y
     MouseMove mouseX, mouseY, 0
+    GiveBack()
 }
 
 ; ---- UI Automation helpers ----------------------------------------------------
@@ -647,11 +795,75 @@ Invoke(el) {
 
 ; Presses a button that's either an on/off switch (like Dictate on the Code page) or a plain button.
 PressButton(el) {
-    if (pattern := GetPattern(el, 10015, "{94cf8058-9b8d-4ab9-8bfd-4cd0a33c8c70}")) {
-        ComCall(3, pattern)   ; Toggle
+    ; From behind a game, it's clicked with click messages sent to Claude's window (see PostClick).
+    if (Behind && PostClick(el, ClaudeHwnd))
         return
+    UiaPress(el)
+}
+
+; Clicks a button by sending Claude's window the click messages themselves, at the middle of the
+; button: no mouse moves, and nothing lets Claude take the front. (Pressing a button through UI
+; Automation does let it: Claude's window then jumps in front of the game, which drops the keys
+; you're holding and lets go of the mouse.) Returns false if the button isn't somewhere it can be
+; clicked (like while Claude is minimized).
+PostClick(el, hwnd) {
+    if !(hwnd && WinExist(hwnd))
+        return false
+    old := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")   ; (real screen pixels, like UI Automation's)
+    try {
+        rect := Buffer(16, 0)
+        ComCall(43, el, "ptr", rect)   ; CurrentBoundingRectangle
+        left := NumGet(rect, 0, "int"), top := NumGet(rect, 4, "int"), right := NumGet(rect, 8, "int"), bottom := NumGet(rect, 12, "int")
+        if (right <= left || bottom <= top)
+            return false
+        pt := Buffer(8), NumPut("int", (left + right) // 2, "int", (top + bottom) // 2, pt)
+        DllCall("ScreenToClient", "ptr", hwnd, "ptr", pt)
+        x := NumGet(pt, 0, "int"), y := NumGet(pt, 4, "int")
+        client := Buffer(16, 0), DllCall("GetClientRect", "ptr", hwnd, "ptr", client)
+        if (x < 0 || y < 0 || x >= NumGet(client, 8, "int") || y >= NumGet(client, 12, "int"))
+            return false
+        spot := (y & 0xFFFF) << 16 | (x & 0xFFFF)
+        DllCall("PostMessage", "ptr", hwnd, "uint", 0x200, "ptr", 0, "ptr", spot)   ; WM_MOUSEMOVE
+        DllCall("PostMessage", "ptr", hwnd, "uint", 0x201, "ptr", 1, "ptr", spot)   ; WM_LBUTTONDOWN (MK_LBUTTON)
+        Sleep 30
+        DllCall("PostMessage", "ptr", hwnd, "uint", 0x202, "ptr", 0, "ptr", spot)   ; WM_LBUTTONUP
+        return true
+    } catch {
+        return false
+    } finally {
+        DllCall("SetThreadDpiAwarenessContext", "ptr", old, "ptr")
     }
-    Invoke(el)
+}
+
+; Presses a button through UI Automation: an on/off switch or a plain button. From behind a game,
+; Windows' foreground lock goes on first and Claude is kept from staying in front (see
+; HoldGameInFront), though it can still come forward for a moment this way.
+UiaPress(el) {
+    if Behind
+        DllCall("LockSetForegroundWindow", "uint", 1)   ; LSFW_LOCK
+    if (pattern := GetPattern(el, 10015, "{94cf8058-9b8d-4ab9-8bfd-4cd0a33c8c70}"))
+        ComCall(3, pattern)   ; Toggle
+    else
+        Invoke(el)
+    HoldGameInFront()
+}
+
+; Claude brings its own window to the front when its dictation starts or stops. From behind a game,
+; the game gets the front straight back: for a couple of seconds after pressing one of Claude's
+; buttons, whenever Claude takes it, it's given back.
+HoldGameInFront(ms := 2000) {
+    global FrontUntil
+    if !(Behind && CameFrom)
+        return
+    FrontUntil := A_TickCount + ms
+    SetTimer(HoldFront, 25)
+}
+
+HoldFront() {
+    if (A_TickCount > FrontUntil)
+        return SetTimer(HoldFront, 0)
+    if (WinExist(CameFrom) && !WinActive(CameFrom) && WinActive("ahk_exe claude.exe"))
+        try WinActivate(CameFrom)
 }
 
 IsSelected(el) {
