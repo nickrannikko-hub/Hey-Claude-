@@ -44,6 +44,8 @@ unzip it, and follow [Setup](#setup).
   keys you're holding.
 - Recognition runs offline on your PC, can be taught your voice, and ignores everyday look-alikes
   like "oh yeah", "okay cool" and "that was cool".
+- **Works in voice chats:** while Discord (or another program) is using your mic, it still hears
+  your "Hey Claude" but not your conversation with friends.
 
 **Voice and dictation in one press**
 - Voice mode on the Chat page, or dictation on the Code page, from a single button or shortcut.
@@ -156,6 +158,11 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
 - It ignores "Hey Claude" said too quietly (background talk) and checks each one against look-alike
   phrases ("oh yeah", "let's go", "caught it"...) so everyday speech doesn't set it off. Very close
   phrases like "hey caught" can still get through now and then.
+- **In a voice chat** (while Discord or another program is using your mic), "Hey Claude" has to be
+  said on its own: short, followed by a moment's pause (the way you wait for the beep), and heard by
+  Windows' own dictation as something like "Hey Claude" too. Talking to friends ("this is like
+  1.6", "it did it again, Claude") doesn't set it off, and it starts about half a second after you
+  say it. Saying the words "Hey Claude" to your friends and then stopping will still start it.
 - Right-click the tray icon to **pause listening** (this frees the mic), run **Teach it my voice**,
   open **Windows voice training**, or exit.
 
@@ -205,6 +212,9 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
     where you put it. Drag it back near its place and an outline shows where it'll snap back on;
     let go there and it does.
   - **In a game**, the page opens without taking the front from the game, and stays on top of it.
+    You can click its links and buttons, scroll, and pick out text without being tabbed out of the
+    game (typing into the page needs the game out of the way). If dragging, minimizing or closing
+    the page does pull you out, the game is put right back in front.
 - Clicks go straight through the box to whatever is underneath (only its handles and tabs take
   clicks), and it never takes the keyboard from what you're typing in.
 - **Games:** the captions start themselves with AutoHotkey's UI Access version when it's installed
@@ -232,6 +242,7 @@ Each script has a Settings block near the top. The most useful ones:
 | voice + send | `KEEP_GOING_MS` | Set to 0 for one message per press instead of a back-and-forth |
 | Hey Claude | `MIN_CONFIDENCE`, `MIN_LOUDNESS` | How sure and how loud "Hey Claude" must be. **Teach it my voice** sets both and saves them in `claude-hey-claude.ini` |
 | Hey Claude | `LOOK_ALIKES` | Phrases "Hey Claude" must beat. Add any word that keeps setting it off |
+| Hey Claude | `VOICE_CHAT_MAX_SECONDS`, `VOICE_CHAT_PAUSE_MS` | In a voice chat: how long "Hey Claude" can be (1.2 s) and the pause it needs after it (0.4 s). Raise the first if it misses you, the second if friends' chatter still sets it off |
 | Hey Claude | `VOICE_IDLE_MS` | How long voice mode can sit on "Listening" before it ends (5 s; 0 turns it off) |
 | voice + send | `MAX_TALK_MS` | Dictation sends itself after this long, even if it still hears noise (3 minutes) |
 | Captions | the **cog** on the box | A settings window with tabs (**LOOK**, **TEXT**, **SOUND**, **MOTION**, **BOX**, **TUCK & LINKS**); point at a **?** to see what a setting does. Font and size, colors (Dark, Light, Match Windows, themes like Midnight, Ocean, Forest, Sunset, Paper, Rosé and Mono, or your own with **Custom**, which keeps them readable and has a **Default** button), how see-through it is (down to just the words), corner, width and height, how Claude's words come in (fading in, or typed out letter by letter), their speed, scroll smoothness, how the box appears and tucks away, how long it stays up, whether words light up in voice mode, bubbles on the Chat page, a gently floating box, **High FPS** (drawn as often as your screen refreshes), **Game mode** (light and still while a game is in front), typing sounds (soft clicks, Animal Crossing or Undertale style) and their volume, hearing Claude in voice mode, reading Code replies out loud (voice and speed), the typing box, the Claude tab's count and wiggle, and opening links by themselves. **Reset to defaults** puts it all back. Saved in `claude-captions.ini` |
@@ -249,7 +260,8 @@ Each script has a Settings block near the top. The most useful ones:
   microphone are, but they don't record or send anything. Reading replies out loud uses a Windows
   voice on your PC.
 - Log files are saved next to the scripts (`...-log.txt`). The voice + send log includes the text of
-  messages it sent, and the "Hey Claude" log notes goodbyes. **Teach it my voice** saves your
+  messages it sent, and the "Hey Claude" log notes goodbyes and, in a voice chat, the few words
+  it heard whenever it ignores something. **Teach it my voice** saves your
   recordings in `hey-claude-voice-samples`. The captions keep `claude-captions-times.txt`, noting
   when each message was sent by its words, and `claude-captions-log.txt`, noting which program took
   the front whenever a game (or anything full screen) lost it. Keep those to yourself; `.gitignore`
@@ -263,8 +275,9 @@ Each script has a Settings block near the top. The most useful ones:
   button name Claude showed, which usually points straight at the problem.
 - **"Hold to record" message:** see setup step 4.
 - **"Hey Claude" misses you or starts by mistake:** each attempt is in `claude-hey-claude-log.txt`
-  with how sure it was and how loud. Run **Teach it my voice** again, or adjust `MinConfidence` /
-  `MinLoudness` in `claude-hey-claude.ini`.
+  with how sure it was and how loud (and in a voice chat, how long it was and what dictation heard).
+  Run **Teach it my voice** again, or adjust `MinConfidence` / `MinLoudness` in
+  `claude-hey-claude.ini`.
 - **The buttons can't start Claude:** your install may use a different app ID. The setup check
   shows the exact `CLAUDE_APP` value to put at the top of each script.
 - **The captions' lit-up words run ahead of (or behind) Claude's voice:** point at the box, click

@@ -131,7 +131,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.6.4"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.6.5"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -322,6 +322,8 @@ GameFront := false              ; a game (or anything full screen) is in front (
 PageAsked := {page: "", at: 0}  ; the page of Claude's you just switched to from the box, until Claude's window shows it (see SelectPage)
 PageConvs := Map()              ; the conversation the box last showed on each page ("chat" or "code"), by its key
 SnapGui := "", SnapCanvas := "" ; the outline showing where the page snaps back on (see ShowSnapSpot)
+Catcher := ""                   ; lies over the page in a game, passing your clicks on to it (see CatchPage)
+LastGame := 0, GameSeenAt := 0  ; the game last seen in front, and when (see ReturnToGame)
 
 if (A_LineFile = A_ScriptFullPath)
     CaptionsMain()
@@ -374,6 +376,9 @@ CaptionsMain() {
     OnMessage(0x202, BoxMouseUp)     ; WM_LBUTTONUP
     OnMessage(0x215, BoxMouseUp)     ; WM_CAPTURECHANGED: something else took the mouse mid-drag
     OnMessage(0x20, BoxCursor)       ; WM_SETCURSOR
+    OnMessage(0x20A, CatcherWheel)   ; WM_MOUSEWHEEL (on the page, in a game: see CatchPage)
+    OnMessage(0x20E, CatcherWheel)   ; WM_MOUSEHWHEEL
+    OnMessage(0x203, CatcherDoubleClick)   ; WM_LBUTTONDBLCLK
     OnExit(GoAway)
     ; claude-hey-claude.ahk sends this the moment it hears "Hey Claude".
     OnMessage(DllCall("RegisterWindowMessage", "str", "ClaudeCaptions.HeyClaude", "uint"), HeardHeyClaude)
@@ -437,9 +442,11 @@ GoAway(*) {
 Gaming() => Settings.GameMode && GameFront
 
 CheckGameFront() {
-    global GameFront
+    global GameFront, LastGame, GameSeenAt
     front := false
-    try front := CoversScreen(WinExist("A"))   ; (see claude-voice-on-off-send.ahk)
+    try front := CoversScreen(hwnd := WinExist("A"))   ; (see claude-voice-on-off-send.ahk)
+    if front
+        LastGame := hwnd, GameSeenAt := A_TickCount
     if (front != GameFront) {
         GameFront := front
         Kick()
@@ -2204,6 +2211,8 @@ ClickThrough(on) {
 ; scroll bar starts dragging it.
 BoxMouseDown(wParam, lParam, msg, hwnd) {
     global Drag
+    if (Catcher && hwnd = Catcher.Hwnd)   ; (on the page, in a game: see CatchPage)
+        return PassToPage(msg, wParam, lParam)
     if (SettingsGui && hwnd = SettingsGui.Hwnd)
         return SettingsDown()
     if (PanelGui && hwnd = PanelGui.Hwnd)
@@ -2274,6 +2283,8 @@ BoxMouseDown(wParam, lParam, msg, hwnd) {
 }
 
 BoxMouseMove(wParam, lParam, msg, hwnd) {
+    if (Catcher && hwnd = Catcher.Hwnd)   ; (on the page, in a game: see CatchPage)
+        return PassToPage(msg, wParam, lParam)
     if (SettingsGui && hwnd = SettingsGui.Hwnd)
         return SettingsMove()
     if (InStr(Drag.mode, "peek") = 1) {   ; dragging the Claude tab: it goes to the edge of the screen nearest the mouse
@@ -2310,6 +2321,8 @@ BoxMouseMove(wParam, lParam, msg, hwnd) {
 
 BoxMouseUp(wParam, lParam, msg, hwnd) {
     global Drag
+    if (Catcher && hwnd = Catcher.Hwnd)   ; (on the page, in a game: see CatchPage)
+        return msg = 0x202 ? PassToPage(msg, wParam, lParam) : 0
     if (SettingsGui && hwnd = SettingsGui.Hwnd)
         return SettingsUp(msg)
     if (InStr(Drag.mode, "peek") = 1) {
@@ -2395,7 +2408,7 @@ BoxCursor(wParam, lParam, msg, hwnd) {
         DllCall("SetCursor", "ptr", DllCall("LoadCursor", "ptr", 0, "ptr", shapes[Anim.hot], "ptr"))
         return true
     }
-    if (BoxGui && wParam = BoxGui.Hwnd) {   ; anywhere else on it (in a game, see WatchMouse): the usual arrow
+    if (BoxGui && wParam = BoxGui.Hwnd || Catcher && wParam = Catcher.Hwnd) {   ; anywhere else on it (in a game, see WatchMouse), or on the page in a game: the usual arrow
         DllCall("SetCursor", "ptr", DllCall("LoadCursor", "ptr", 0, "ptr", 32512, "ptr"))
         return true
     }
@@ -2860,6 +2873,7 @@ Minimize() {
     UpdateVisibility()
     if PageOpen()
         DllCall("ShowWindow", "ptr", Browser.hwnd, "int", 0), Browser.min := true   ; SW_HIDE
+    CatchPage()
 }
 
 ; Brings the box back out of its tab (it grows out of it), and clears the count; and the page that
@@ -3201,6 +3215,7 @@ OpenPage(url) {
                 Browser.hwnd := hwnd, Browser.inset := PageInsets(hwnd), Browser.set := ""
                 WatchPage()
                 KeepPageUp()
+                ReturnToGame(), SetTimer(ReturnToGame, -600)   ; (if it took the front from the game anyway)
                 MoveBrowser()
                 UpdateVisibility()
                 return
@@ -3221,8 +3236,10 @@ ClosePage() {
     Browser := {hwnd: 0, url: "", side: "", set: "", w: 0, h: 0, min: false, hook: 0, top: false, inset: "", tucked: false, detached: false, hook2: 0}
     LastChange := A_TickCount, Opened := true
     PlacePageTab()
+    CatchPage()
     Kick()
     UpdateVisibility()
+    SetTimer(ReturnToGame, -300)   ; (closing it with its ✕ brought it in front first)
 }
 
 ; The page under the box is open (whether it shows or not).
@@ -3246,6 +3263,8 @@ TuckPage() {
     DllCall("ShowWindow", "ptr", Browser.hwnd, "int", 0)   ; SW_HIDE: out of sight, and off the taskbar
     Browser.tucked := true, Browser.min := true
     PlacePageTab(), Kick(), UpdateVisibility()
+    CatchPage()
+    ReturnToGame()   ; (its – brought it in front)
 }
 
 UntuckPage() {
@@ -3340,6 +3359,7 @@ PageInsets(hwnd := 0) {
 ; In a game (which often keeps its own window always on top), the page under the box is kept on
 ; top too, so the game doesn't hide it; otherwise it's an ordinary window again.
 KeepPageUp() {
+    CatchPage()
     if !PageOpen()
         return
     top := Gaming()
@@ -3396,6 +3416,7 @@ MoveBrowser() {
     ; SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS, and SWP_NOSIZE if it's only moving
     DllCall("SetWindowPos", "ptr", Browser.hwnd, "ptr", 0, "int", spot.x - edges.l, "int", spot.y - edges.t,
         "int", spot.w + edges.l + edges.r, "int", spot.h + edges.t + edges.b, "uint", 0x4014 | (sized ? 1 : 0))
+    CatchPage(spot)
 }
 
 ; Notices you moving or resizing the page yourself, by its title bar or its edges (see PageMoved).
@@ -3428,12 +3449,84 @@ PageMoved(hook, event, hwnd, idObject, idChild, thread, time) {
     if (Abs(w - set.w) > 2 || Abs(h - set.h) > 2)
         Browser.w := w, Browser.h := h
     Browser.set := {x: x, y: y, w: w, h: h}
+    CatchPage(Browser.set)
     if !Browser.detached
         Browser.detached := true, SetTimer(UpdateVisibility, -1)
     ; Near its place on the box, an outline shows where it'll snap back on when you let go.
     spot := BrowserSpot()
     ShowSnapSpot(Abs(x - spot.x) + Abs(y - spot.y) <= SnapZone() ? spot : "")
     SetTimer(WatchPageDrag, 30)
+}
+
+; In a game, clicking the page would bring its window in front of the game (out of the game, with the
+; taskbar showing: Windows lets a click do that). So an invisible window lies over the page, all but
+; its title bar, and hands your clicks, scrolling and pointing on to it as messages, which don't
+; bring it in front: the game stays in front and the page still works (links, buttons, scrolling,
+; picking out text), though you can't type into it there. Its title bar is left to the page, for
+; dragging it and its buttons. seen: the page's visible edges, if they're known ({x, y, w, h}).
+CatchPage(seen := "") {
+    global Catcher
+    show := Gaming() && PageOpen() && !Minimized && !Hidden && DllCall("IsWindowVisible", "ptr", Browser.hwnd)
+        && !DllCall("IsIconic", "ptr", Browser.hwnd)
+    if (show && !seen) {
+        rect := Buffer(16)
+        if (show := DllCall("dwmapi\DwmGetWindowAttribute", "ptr", Browser.hwnd, "uint", 9, "ptr", rect, "uint", 16) = 0)
+            seen := {x: NumGet(rect, 0, "int"), y: NumGet(rect, 4, "int"), w: NumGet(rect, 8, "int") - NumGet(rect, 0, "int"), h: NumGet(rect, 12, "int") - NumGet(rect, 4, "int")}
+    }
+    if !show {
+        if (Catcher && DllCall("IsWindowVisible", "ptr", Catcher.Hwnd))
+            DllCall("ShowWindow", "ptr", Catcher.Hwnd, "int", 0)
+        return
+    }
+    if !Catcher {
+        Catcher := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +E0x80000 +E0x08000000")   ; never takes the front
+        Catcher.BackColor := "000000"
+        DllCall("SetLayeredWindowAttributes", "ptr", Catcher.Hwnd, "uint", 0, "uchar", 1, "uint", 2)   ; all but invisible, and still takes clicks
+    }
+    title := Round(34 * Look.s)   ; (the page's title bar)
+    DllCall("SetWindowPos", "ptr", Catcher.Hwnd, "ptr", -1, "int", seen.x, "int", seen.y + title, "int", seen.w, "int", Max(1, seen.h - title),
+        "uint", 0x0050)   ; HWND_TOPMOST; SWP_NOACTIVATE | SWP_SHOWWINDOW
+}
+
+; A click (or the mouse moving, or a double click) on the invisible window over the page, handed on
+; to the page at the same spot, as a message.
+PassToPage(msg, wParam, lParam) {
+    if !PageOpen()
+        return 0
+    pt := Buffer(8), NumPut("int", lParam << 48 >> 48, "int", lParam << 32 >> 48, pt)   ; (where on the invisible window)
+    DllCall("ClientToScreen", "ptr", Catcher.Hwnd, "ptr", pt)
+    DllCall("ScreenToClient", "ptr", Browser.hwnd, "ptr", pt)
+    spot := (NumGet(pt, 4, "int") & 0xFFFF) << 16 | (NumGet(pt, 0, "int") & 0xFFFF)
+    if (msg = 0x201 || msg = 0x203)
+        DllCall("SetCapture", "ptr", Catcher.Hwnd)   ; (so a drag, like picking out text, keeps going)
+    DllCall("PostMessage", "ptr", Browser.hwnd, "uint", msg, "ptr", wParam, "ptr", spot)
+    if (msg = 0x202)
+        DllCall("ReleaseCapture")
+    return 0
+}
+
+; The mouse wheel over the invisible window over the page: handed on to the page.
+CatcherWheel(wParam, lParam, msg, hwnd) {
+    if !(Catcher && hwnd = Catcher.Hwnd && PageOpen())
+        return
+    DllCall("PostMessage", "ptr", Browser.hwnd, "uint", msg, "ptr", wParam, "ptr", lParam)   ; (it's in screen coordinates already)
+    return 0
+}
+
+CatcherDoubleClick(wParam, lParam, msg, hwnd) {
+    if (Catcher && hwnd = Catcher.Hwnd)
+        return PassToPage(msg, wParam, lParam)
+}
+
+; Puts the game you were playing back in front after something with the page brought the page (or
+; nothing) in front instead: you dragging it by its title bar, minimizing or closing it, or it
+; opening. So you're not left out of the game with the taskbar showing.
+ReturnToGame() {
+    if !(Settings.GameMode && LastGame && A_TickCount - GameSeenAt < 120000 && WinExist(LastGame) && !WinActive(LastGame))
+        return
+    front := WinExist("A")
+    if (!front || WinActive("ahk_exe msedge.exe") || WinGetClass(front) ~= "^(Progman|WorkerW|Shell_TrayWnd)$")
+        try WinActivate(LastGame)
 }
 
 ; How near its place on the box (across and down, added up) the page has to be let go of to snap back on.
@@ -3446,6 +3539,7 @@ WatchPageDrag() {
     SetTimer(WatchPageDrag, 0)
     ShowSnapSpot("")
     PageDropped()
+    ReturnToGame()   ; (dragging it by its title bar brought it in front)
 }
 
 ; The outline showing where the page will snap back on (spot, its visible edges), in Claude's color,
@@ -6614,5 +6708,6 @@ ToggleHidden(itemName, *) {
             DllCall("ShowWindow", "ptr", Browser.hwnd, "int", 0), Browser.min := true   ; SW_HIDE
         else if (!Minimized && !Browser.tucked)
             BringPageBack()
+        CatchPage()
     }
 }

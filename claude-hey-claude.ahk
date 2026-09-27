@@ -47,6 +47,11 @@
 WAKE_PHRASE     := "hey claude"
 MIN_CONFIDENCE  := 0.85   ; how sure the recognizer must be (0 to 1). "Teach it my voice" sets this for you
 MIN_LOUDNESS    := 0.02   ; how loud "Hey Claude" must be (0 to 1), so background talk doesn't set it off. "Teach it my voice" sets this too
+; While another program is using the mic (like Discord in a voice chat), "Hey Claude" has to be said
+; on its own, since talking to friends about Claude ("the Claude…") can sound a lot like it:
+VOICE_CHAT_MAX_SECONDS := 1.2   ; ...no longer than this ("Hey Claude" on its own is usually 0.5 to 0.8 s)
+VOICE_CHAT_PAUSE_MS := 400      ; ...followed by a pause at least this long, the way you wait for the beep (ms),
+                                ; and heard by Windows' free dictation as something like "Hey Claude" too
 GOODBYE_QUIET_MS := 1000  ; after a goodbye, end voice mode once Claude's voice has been quiet this long (ms)
 GOODBYE_MAX_MS  := 5000   ; ...but never later than this after the goodbye was caught, even if Claude is still talking
 VOICE_IDLE_MS   := 5000   ; end voice mode once it has just been "Listening" this long, with nobody talking (ms). 0 turns it off
@@ -71,6 +76,7 @@ Listener := ""
 Paused := false
 Busy := false
 LastDone := 0
+TalkStarts := []                            ; where in the audio the recognizer last started hearing someone talk
 Teaching := ""                              ; the "Teach it my voice" window while it's open
 VoiceListening := false                     ; true while voice mode is on and it's watching for a goodbye
 LastSaid := ""                              ; the newest "You said" message already checked
@@ -157,13 +163,14 @@ StartListening(audioFile := "") {
         reco.AudioInput := reco.GetAudioInputs().Item(0)   ; the first microphone on the list, which is Windows' default
     }
     ctx := reco.CreateRecoContext()
-    ctx.EventInterests := 16 | 512   ; recognitions, and near misses the recognizer wasn't sure about
+    ctx.EventInterests := 8 | 16 | 512   ; talking starting, recognitions, and near misses the recognizer wasn't sure about
     ctx.RetainedAudio := 1           ; keep the audio of each one, so "Teach it my voice" can save it
     grammar := ctx.CreateGrammar()
     rule := grammar.Rules.Add("wake", 0x1 | 0x20)   ; top-level rule that can be built here in code
     rule.InitialState.AddWordTransition(ComValue(9, 0), WAKE_PHRASE)   ; ComValue(9, 0) marks the end of the phrase
     grammar.Rules.Commit()
     grammar.CmdSetRuleState("wake", 1)   ; active
+    TalkStarts.Length := 0   ; (positions in the old audio don't count in the new)
     ComObjConnect(ctx, WakeEvents)
     if (audioFile = "")
         reco.State := 1   ; start listening
@@ -172,12 +179,47 @@ StartListening(audioFile := "") {
 
 class WakeEvents {
     ; Recognition(StreamNumber, StreamPosition, RecognitionType, Result, context)
-    static Recognition(params*) => OnHeard(params[4])
+    static Recognition(params*) => OnHeard(params[4], params[2])
     ; FalseRecognition(StreamNumber, StreamPosition, Result, context): heard something, but not sure it was the phrase
-    static FalseRecognition(params*) => OnHeard(params[3])
+    static FalseRecognition(params*) => OnHeard(params[3], params[2])
+    ; PhraseStart(StreamNumber, StreamPosition, context): started hearing someone talk
+    static PhraseStart(params*) => NoteTalking(params[2])
 }
 
-OnHeard(result) {
+NoteTalking(pos) {
+    TalkStarts.Push(pos)
+    if (TalkStarts.Length > 20)
+        TalkStarts.RemoveAt(1)
+}
+
+; Another program that's using the microphone right now (like Discord, in a voice chat), by the name
+; of its program, or "" if none is: Windows notes which programs are using it. Claude and these
+; scripts themselves don't count.
+VoiceChat() {
+    static base := "HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+    for where in [base "\NonPackaged", base] {
+        loop reg, where, "K" {
+            name := RegExReplace(A_LoopRegName, "^.*#")   ; (C:#Users#...#Discord.exe: just Discord.exe)
+            if (name = "NonPackaged" || name ~= "i)^(autohotkey.*|claude)(\.exe)?$|^Claude_")
+                continue
+            key := RegExReplace(A_LoopRegKey, "i)^(HKEY_CURRENT_USER|HKCU)\\") "\" A_LoopRegName
+            if (MicTime(key, "LastUsedTimeStart") && MicTime(key, "LastUsedTimeStop") = 0)   ; started, and not stopped yet
+                return RegExReplace(name, "i)\.exe$")
+        }
+    }
+    return ""
+}
+
+; One of the times Windows notes when a program starts or stops using the microphone (a 64-bit
+; number, which RegRead can't read), or "" if there isn't one.
+MicTime(key, name) {
+    if DllCall("advapi32\RegGetValueW", "ptr", 0x80000001, "wstr", key, "wstr", name, "uint", 0x48, "ptr", 0, "int64*", &when := 0, "uint*", &size := 8) = 0   ; HKEY_CURRENT_USER, RRF_RT_QWORD
+        return when
+    return ""
+}
+
+; pos: where in the recognizer's audio the phrase ended.
+OnHeard(result, pos := 0) {
     global Busy, LastDone
     info := result.PhraseInfo
     if (info.GetText() != WAKE_PHRASE)
@@ -188,13 +230,19 @@ OnHeard(result) {
         TeachSample(result, confidence, PhraseLoudness(result))
         return
     }
+    heardAt := A_TickCount
     if (confidence < MIN_CONFIDENCE) {
         if (confidence >= 0.3)   ; note near misses, but not every bit of ordinary talking
             HeyLog("Ignored " heard Format(": needs {:.2f}", MIN_CONFIDENCE))
         return
     }
-    loudness := PhraseLoudness(result)
-    heard := Format("'Hey Claude' ({:.2f} sure, loudness {:.3f})", confidence, loudness)
+    chat := VoiceChat()
+    loudness := PhraseLoudness(result), audio := PhraseAudio(result), seconds := audio.bytes / audio.perSecond
+    heard := Format("'Hey Claude' ({:.2f} sure, loudness {:.3f}, {:.2f} s)", confidence, loudness, seconds)
+    if (chat != "" && seconds > VOICE_CHAT_MAX_SECONDS) {
+        HeyLog("Ignored " heard Format(": too long to be just 'Hey Claude' while {} is using the mic, needs {:.1f} s or less", chat, VOICE_CHAT_MAX_SECONDS))
+        return
+    }
     if (loudness < MIN_LOUDNESS) {
         HeyLog("Ignored " heard Format(": too quiet, needs {:.3f}", MIN_LOUDNESS))
         return
@@ -208,11 +256,110 @@ OnHeard(result) {
         return
     }
     Busy := true   ; also keeps other sounds from starting a second check meanwhile
+    if (chat != "") {
+        ; Windows' free dictation writes down what was actually said, which covers the look-alikes
+        ; below and much more.
+        said := DictatedText(result)
+        if !SoundsLikeWake(said) {
+            Busy := false
+            HeyLog("Ignored " heard ": it was '" said "', while " chat " is using the mic")
+            return
+        }
+        ; Then the pause after it, waited for outside this event: the recognizer holds back its next
+        ; ones (like hearing you carry on talking) until this one is done.
+        pos := Number(pos), perMs := audio.perSecond / 1000
+        reco := ""
+        try reco := result.RecoContext.Recognizer
+        heard .= ", heard as '" said "'"
+        SetTimer(() => AfterPause(reco, heard, chat, pos, pos + VOICE_CHAT_PAUSE_MS * perMs, pos + (VOICE_CHAT_PAUSE_MS + 100) * perMs, heardAt), -1)
+        return
+    }
     if !BeatsLookAlikes(result, &picked) {
         Busy := false
         HeyLog("Ignored " heard ": next to look-alike phrases it sounded like '" (picked = "" ? "none of them" : picked) "'")
         return
     }
+    Wake(heard)
+}
+
+; After "Hey Claude" (heard, ending at pos in the recognizer's audio) while another program is
+; using the mic: once reco has heard up to enough (a little past limit, since it notices talking
+; starting a moment late), starts if nobody started talking again before limit. You stop and wait
+; for the beep, while talking to friends just carries on.
+AfterPause(reco, heard, chat, pos, limit, enough, heardAt) {
+    global Busy
+    heardTo := 0
+    try heardTo := Number(reco.Status.CurrentStreamPosition)
+    waited := A_TickCount - heardAt
+    ; (going by the clock instead when it can't say, as with a recording: it reads 0 there)
+    if (heardTo > 0 ? heardTo < enough && waited < VOICE_CHAT_PAUSE_MS + 1000 : waited < VOICE_CHAT_PAUSE_MS + 100) {   ; (not that far yet; checks again shortly)
+        SetTimer(() => AfterPause(reco, heard, chat, pos, limit, enough, heardAt), -20)
+        return
+    }
+    for start in TalkStarts {
+        if (Number(start) > pos && Number(start) <= limit) {
+            Busy := false
+            HeyLog("Ignored " heard ": you kept talking right after it, while " chat " is using the mic")
+            return
+        }
+    }
+    Wake(heard Format(", with a pause after it ({:.2f} s after hearing it), while {} is using the mic", (A_TickCount - heardAt) / 1000, chat))
+}
+
+; What Windows' free dictation makes of the recognized phrase: the words, in lowercase, or "?" if
+; it couldn't tell. Listening for just "Hey Claude", the recognizer squeezes all sorts of talking
+; into it, but dictation writes down what you actually said ("this is like 1.6"), and "Hey Claude"
+; as a couple of words like "they clawed" or "a client".
+DictatedText(result) {
+    path := A_Temp "\hey-claude-dictate.wav"
+    text := "?"
+    try {
+        SaveAudio(result, path)
+        reco := ComObject("SAPI.SpInProcRecognizer")
+        stream := ComObject("SAPI.SpFileStream")
+        stream.Open(path, 0)
+        reco.AudioInputStream := stream
+        ctx := reco.CreateRecoContext()
+        ctx.EventInterests := 1 | 16   ; end of the recording, recognitions
+        grammar := ctx.CreateGrammar()
+        sink := DictateEvents()
+        ComObjConnect(ctx, sink)
+        grammar.DictationLoad("", 0)
+        grammar.DictationSetState(1)
+        deadline := A_TickCount + 3000
+        while (!sink.done && A_TickCount < deadline)
+            Sleep 20
+        ComObjConnect(ctx)
+        stream.Close()
+        text := StrLower(Trim(sink.text))
+    }
+    try FileDelete(path)
+    return text
+}
+
+class DictateEvents {
+    done := false
+    text := ""
+    Recognition(params*) {
+        try this.text .= " " params[4].PhraseInfo.GetText()
+    }
+    EndStream(params*) => this.done := true
+}
+
+; Whether dictated words could be "Hey Claude": nothing heard, or at most three words with one
+; starting like "Claude" does ("they clawed", "a client", "date closed", "hey cloud").
+SoundsLikeWake(text) {
+    if (text = "?")   ; couldn't check; don't block it
+        return true
+    text := Trim(RegExReplace(text, "[^a-z0-9']+", " "))
+    if (text = "")
+        return true
+    return StrSplit(text, " ").Length <= 3 && RegExMatch(text, "(^|\s)[ckg]l")
+}
+
+; Does what "Hey Claude" does, once it has passed every check (heard: what was heard, for the log).
+Wake(heard) {
+    global Busy, LastDone
     HeyLog("Heard " heard ", starting")
     TellCaptions()
     started := A_TickCount
@@ -297,6 +444,16 @@ PhraseLoudness(result) {
         return Loudness(NumGet(ComObjValue(data), 16, "ptr"), data.MaxIndex() + 1, wave.SamplesPerSec, wave.Channels, wave.BitsPerSample)
     }
     return 1   ; couldn't measure; don't block it
+}
+
+; The recognized phrase's recording: how many bytes long it is, and how many bytes make a second.
+PhraseAudio(result) {
+    try {
+        audio := result.Audio()
+        wave := audio.Format.GetWaveFormatEx()
+        return {bytes: audio.GetData().MaxIndex() + 1, perSecond: wave.SamplesPerSec * wave.Channels * wave.BitsPerSample // 8}
+    }
+    return {bytes: 0, perSecond: 32000}   ; (couldn't tell: 16 kHz, 16-bit, one channel, what the recognizer usually hears in)
 }
 
 ; The loudest 20 ms of 16-bit audio at ptr, from 0 to 1.
