@@ -1,12 +1,51 @@
-# Claude Stream Deck Voice Controls (unofficial)
+# Hey, Claude! (unofficial)
 
-Stream Deck buttons (or keyboard shortcuts), a hands-free **"Hey Claude"** wake word, and
-on-screen **captions** of your conversation for the Claude desktop app on Windows, built with
-[AutoHotkey v2](https://www.autohotkey.com/).
+**A plugin for the Claude desktop app on Windows.** It gives Claude a floating captions window
+that follows your conversation over whatever you're doing, a hands-free **"Hey Claude"** wake
+word, one-press voice and dictation, and shortcuts (or Stream Deck buttons) for getting around
+Claude. Built with [AutoHotkey v2](https://www.autohotkey.com/).
 
-> **Unofficial.** Not made by or affiliated with Anthropic. These scripts work by finding and
-> pressing buttons in Claude's app by their names, so a Claude update that renames a button can
+**[Download the latest release](https://github.com/nickrannikko-hub/Hey-Claude-/releases/latest)**,
+unzip it, and follow [Setup](#setup).
+
+> **Unofficial.** Not made by or affiliated with Anthropic. These scripts work by reading Claude's
+> window and pressing its buttons by their names, so a Claude update that renames a button can
 > break them until the scripts are updated.
+
+## Features
+
+**Captions: your Claude conversation in a floating window**
+- What you say and Claude's reply show up as they happen, in a small box that stays on top of your
+  game, browser or other monitor, laid out like Claude's own window (paragraphs, lists, code, and
+  on the Code page each step Claude takes).
+- **Know when Claude is done:** a spark moves while Claude works, and a line at the end of the reply
+  shows the time, tokens and what it's doing, then says **Finished**.
+- **Talk or type:** voice mode shows **LISTENING**, **THINKING** or **SPEAKING** with a glowing light,
+  or type into the box and send without switching windows.
+- **Tuck it away:** the box shrinks into a little Claude tab at the edge of your screen that counts
+  new messages, rocks while Claude works and spins when it's done.
+- **Scroll back** through the conversation with the real time of each message, switch between
+  Chat & Cowork and Code, and open any chat or session from the **☰** list.
+- **Links** in Claude's replies open in a page attached right under the box.
+- **Extras:** Code replies read out loud, typing sounds (soft clicks, Animal Crossing or Undertale
+  style), text that types itself out letter by letter.
+- **Make it yours:** themes or your own colors, any font and size, a see-through background,
+  animations, a gently floating box, High FPS, and any monitor at any scaling (4K included).
+
+**"Hey Claude" wake word**
+- Say "Hey Claude" from anywhere to start voice mode (Chat page) or a dictated message that sends
+  itself (Code page). No tabbing out, no clicking.
+- Recognition runs offline on your PC, can be taught your voice, and ignores everyday look-alikes
+  like "oh yeah", "okay cool" and "that was cool".
+
+**Voice and dictation in one press**
+- Voice mode on the Chat page, or dictation on the Code page, from a single button or shortcut.
+- A back-and-forth mode sends your message when you stop talking, listens again after Claude
+  replies, and ends when you say goodbye.
+
+**Getting around Claude**
+- Open or quit Claude, switch between its pages, or open a chat by name, from keyboard shortcuts,
+  Stream Deck buttons, or a double-click.
 
 ## What's included
 

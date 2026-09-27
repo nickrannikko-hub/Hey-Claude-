@@ -131,7 +131,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.6.0"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.6.2"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -284,7 +284,7 @@ Anim := {running: false, last: 0, lastDraw: 0, p: 0.0, target: 0, hover: 0.0, ho
     hot: "", shown: false, x: 0, y: 0, h: 0, bar: "", liveAt: 0, above: 0.0, aboveAt: 0,
     tabLeft: 0.0, tabRight: 0.0, tabSpeedL: 0.0, tabSpeedR: 0.0, panel: 0.0, panelTarget: 0, panelHot: 0,
     panelX: 0, panelY: 0, panelH: 0, listen: 0.0, switchAt: 0, switchDir: 0, sticky: 0.0, times: 0.0, mouseY: "",
-    lineGoneAt: 0, leanX: 0.0, leanY: 0.0, leanSX: 0.0, leanSY: 0.0, tucking: false, peek: 0.0, peekHover: 0.0,
+    lineGoneAt: 0, leanX: 0.0, leanY: 0.0, leanSX: 0.0, leanSY: 0.0, floatK: 0.0, baseX: 0, baseY: 0, tucking: false, peek: 0.0, peekHover: 0.0,
     peekHot: false, peekX: 0, peekY: 0, peekW: 0, peekH: 0, peekCounts: {code: 0, chat: 0}, wiggleAt: 0, spinAt: 0, tuckedAt: 0, jiggleAt: 0, links: 0.0,
     linkSpots: [], tone: 0.0,
     inputLines: 1, inputRect: "", think: 0.0, dirty: false}
@@ -387,10 +387,13 @@ ClearNote() {
 }
 
 ; On the way out, the box animates away instead of vanishing (and Claude's voice is back on, and
-; reading out loud stops).
+; reading out loud stops). The page open under it closes too; the rest (the list beside it, the
+; settings) goes with the script.
 GoAway(*) {
     MuteClaude(true)
     try StopReading()
+    if (Browser.hwnd && WinExist(Browser.hwnd))
+        try WinClose(Browser.hwnd)
     if !Anim.shown
         return
     Anim.target := 0, Anim.last := A_TickCount
@@ -417,6 +420,8 @@ UpdateCaptions() {
     global Shown, LastChange, LastHwnd, Reads, Listening, Waiting, VoiceModeAt, VoiceMode, VoiceMicLive, PageAt, Sessions
     if (Mod(++Reads, 5) = 0)
         CheckWindowsColors()
+    if (Browser.hwnd && !WinExist(Browser.hwnd))   ; you closed the page under the box
+        ClosePage()
     if Hidden
         return UpdateVisibility()
     ; While you scroll or drag the box, reading waits: a read takes long enough to make the motion stutter.
@@ -476,27 +481,7 @@ UpdateCaptions() {
         UpdateVisibility()
         return
     }
-    ; In a long reply, your message (and the start of the reply) can drop out of what Claude's window
-    ; has loaded, so only the end of the reply was read: it carries on the reply the box already has.
-    if (now.HasOwnProp("partial") && now.partial && Current.you != "" && !Current.dim && !Current.sample) {
-        now.you := Current.you
-        now.claude := CarryOn(Current.claude, now.claude)
-    }
-    if (SettingsGui && now.you = "" && now.claude = "")
-        now := SAMPLE
-    if (now.you != Shown.you || now.claude != Shown.claude || now.live != Shown.live || now.streaming != Shown.streaming
-        || now.thinking != Shown.thinking || now.work != Shown.work) {
-        Critical   ; so the animation never draws the conversation halfway through being changed
-        Shown := now, LastChange := A_TickCount
-        ; While showing "I'm listening…", the exchange from before "Hey Claude" can still change a
-        ; little (its reply finishing). That doesn't count as you saying something.
-        if !(Waiting && Current.dim && !now.live && History.Length && now.you == History[History.Length].you) {
-            Waiting := false
-            ShowExchange(now)
-        }
-        Critical "Off"
-        Kick()
-    }
+    now := TakeRead(now)
     ; What Claude said before your newest message can still change after it: a reply you talked
     ; over goes on until Claude gets to what you said, and your message then lands in the middle of
     ; it. So the exchange before is kept up to date in the history (and its new words, not seen
@@ -651,6 +636,36 @@ LoadEarlier() {
     loop at - 1
         earlier.Push(LoadedExchange(list[A_Index]))
     AddEarlier(earlier)
+}
+
+; Puts what was read from Claude's window (now) in the box, if it's changed. Returns what it went by.
+TakeRead(now) {
+    global Shown, LastChange, Waiting
+    ; In a long reply, your message (and the start of the reply) can drop out of what Claude's window
+    ; has loaded, so only the end of the reply was read: it carries on the reply the box already has.
+    ; While "I'm listening…" shows, that's the exchange from before it (otherwise the end of that
+    ; reply would look like a new one, and type itself out all over again).
+    if (now.HasOwnProp("partial") && now.partial && !Current.sample) {
+        base := Current.dim ? (History.Length ? History[History.Length] : "") : Current
+        if (base && base.you != "")
+            now.you := base.you, now.claude := CarryOn(base.claude, now.claude)
+    }
+    if (SettingsGui && now.you = "" && now.claude = "")
+        now := SAMPLE
+    if (now.you != Shown.you || now.claude != Shown.claude || now.live != Shown.live || now.streaming != Shown.streaming
+        || now.thinking != Shown.thinking || now.work != Shown.work) {
+        Critical   ; so the animation never draws the conversation halfway through being changed
+        Shown := now, LastChange := A_TickCount
+        ; While showing "I'm listening…", the exchange from before "Hey Claude" can still change a
+        ; little (its reply finishing). That doesn't count as you saying something.
+        if !(Waiting && Current.dim && !now.live && History.Length && now.you == History[History.Length].you) {
+            Waiting := false
+            ShowExchange(now)
+        }
+        Critical "Off"
+        Kick()
+    }
+    return now
 }
 
 ; Changes how often Claude's window is read.
@@ -3051,14 +3066,16 @@ OpenPage(url) {
     }
 }
 
-; Closes the page under the box (if it's still open), and lets go of it.
+; Closes the page under the box (if it's still open), and lets go of it. Only the page goes: the box
+; stays up a while as usual (it counts as something happening), rather than going away with it.
 ClosePage() {
-    global Browser
+    global Browser, LastChange, Opened
     if (Browser.hwnd && WinExist(Browser.hwnd))
         try WinClose(Browser.hwnd)
     if Browser.hook
         DllCall("UnhookWinEvent", "ptr", Browser.hook)
     Browser := {hwnd: 0, url: "", side: "", set: "", w: 0, h: 0, min: false, hook: 0}
+    LastChange := A_TickCount, Opened := true
     Kick()
     UpdateVisibility()
 }
@@ -3072,7 +3089,7 @@ BrowserSpot() {
     s := Look.s, gap := Round(8 * s), least := Round(220 * s)
     w := Browser.w || Max(Look.W, Round(420 * s)), want := Browser.h || Round((bottom - top) * 0.5)
     onLeft := InStr(Settings.Corner, "left")
-    below := bottom - (Anim.y + Anim.h + gap), above := Anim.y - gap - top
+    below := bottom - (Anim.baseY + Anim.h + gap), above := Anim.baseY - gap - top
     side := Browser.side
     if (side = "" || side = "below" && below < least || side = "above" && above < least || side = "beside" && Max(below, above) >= want) {
         side := below >= Min(want, 2 * least) || below >= above ? "below" : "above"
@@ -3080,11 +3097,11 @@ BrowserSpot() {
             side := "beside"
         Browser.side := side
     }
-    x := onLeft ? Anim.x : Anim.x + Look.W - w
+    x := onLeft ? Anim.baseX : Anim.baseX + Look.W - w
     switch side {
-        case "below": h := Max(least, Min(want, below)), y := Anim.y + Anim.h + gap
-        case "above": h := Max(least, Min(want, above)), y := Anim.y - gap - h
-        default: h := Min(want, bottom - top), y := Anim.y, x := onLeft ? Anim.x + Look.W + gap : Anim.x - gap - w
+        case "below": h := Max(least, Min(want, below)), y := Anim.baseY + Anim.h + gap
+        case "above": h := Max(least, Min(want, above)), y := Anim.baseY - gap - h
+        default: h := Min(want, bottom - top), y := Anim.baseY, x := onLeft ? Anim.baseX + Look.W + gap : Anim.baseX - gap - w
     }
     x := Max(left, Min(x, right - w)), y := Max(top, Min(y, bottom - h))
     return {x: Round(x), y: Round(y), w: Round(w), h: Round(h)}
@@ -3920,6 +3937,11 @@ Frame() {
         speed := Anim.leanSX, Anim.leanX := Spring(Anim.leanX, dx * near, &speed, dt, 500), Anim.leanSX := speed
         speed := Anim.leanSY, Anim.leanY := Spring(Anim.leanY, dy * near, &speed, dt, 500), Anim.leanSY := speed
     }
+    ; The drift eases away while you type in the box, so the text box laid over it (a window of its
+    ; own, which can only move by whole pixels) sits still with it; and back once you're done.
+    floatTo := floating && !Composing ? 1 : 0
+    if (Anim.floatK != floatTo)
+        Anim.floatK := Approach(Anim.floatK, floatTo, dt / 350), moving := true
     TypingSounds(now)
     ; The glow following Claude's voice, which is drawn up to 60 times a second while it moves.
     following := FollowFrame(now, dt, smooth)
@@ -4252,11 +4274,14 @@ Draw() {
     pos := BoxPosition(h)
     pos.x += Round(InStr(Settings.Corner, "left") ? -enter.shift : enter.shift)
     ; With Float on, it drifts gently, and leans toward the mouse: the window moves by whole pixels,
-    ; and what's in it by the rest, so the drift is smooth.
+    ; and what's in it by the rest, so the drift is smooth. Only the box drifts: what's attached to it
+    ; (the page under it, the list beside it) goes by where it'd be without it (baseX, baseY), and
+    ; stays still, since windows like those can only move by whole pixels.
+    Anim.baseX := pos.x, Anim.baseY := pos.y
     fx := fy := 0
-    if (Settings.Float && Settings.Animate && !Drag.mode) {
-        t := A_TickCount / 1000
-        fx := Sin(t * 0.8) * 2.5 * Look.s + Anim.leanX, fy := Sin(t * 1.1 + 1) * 2 * Look.s + Anim.leanY
+    if (Anim.floatK > 0 && Settings.Animate && !Drag.mode) {
+        t := A_TickCount / 1000, k := Anim.floatK
+        fx := (Sin(t * 0.8) * 2.5 * Look.s + Anim.leanX) * k, fy := (Sin(t * 1.1 + 1) * 2 * Look.s + Anim.leanY) * k
         pos.x += Floor(fx), pos.y += Floor(fy), fx -= Floor(fx), fy -= Floor(fy)
     }
     Anim.x := pos.x, Anim.y := pos.y, Anim.h := h, Anim.lastDraw := A_TickCount
@@ -5045,8 +5070,8 @@ DrawPanel(enterAlpha) {
     s := Look.s, c := Look.colors, list := Sessions.list, rows := Min(list.Length, PANEL_ROWS)
     w := Look.panelW, h := Look.panelHead + Max(1, rows) * Look.rowH + Look.panelPad
     settle := 1 - (1 - Anim.panel) ** 3, slide := (1 - settle) * 16 * s
-    x := Round(InStr(Settings.Corner, "left") ? Anim.x + Look.W + 8 * s - slide : Anim.x - w - 8 * s + slide)
-    y := Anim.y + Look.tabH
+    x := Round(InStr(Settings.Corner, "left") ? Anim.baseX + Look.W + 8 * s - slide : Anim.baseX - w - 8 * s + slide)
+    y := Anim.baseY + Look.tabH
     Anim.panelX := x, Anim.panelY := y, Anim.panelH := h
     ; Nothing in it has changed (a running session's dot breathes a few times a second): it just moves.
     running := InStr(Sessions.key, "Running")
@@ -5394,7 +5419,7 @@ OpenSettings(*) {
     ; Where it goes: beside the box, toward the middle of the screen, or else in the middle.
     MonitorGetWorkArea(BoxMonitor(), &left, &top, &right, &bottom)
     gap := Round(16 * s)
-    x := InStr(Settings.Corner, "left") ? Anim.x + Look.W + gap : Anim.x - gap - SetUI.W
+    x := InStr(Settings.Corner, "left") ? Anim.baseX + Look.W + gap : Anim.baseX - gap - SetUI.W
     if (!Anim.shown || x < left || x + SetUI.W > right)
         x := left + (right - left - SetUI.W) // 2
     SetUI.x := Round(x), SetUI.y := top + (bottom - top - SetUI.H) // 2
@@ -5457,7 +5482,7 @@ SettingRows() {
         {tab: 4, key: "HighFps", name: "High FPS", kind: "toggle", when: () => Settings.Animate,
             help: "Draws the box as often as your screen refreshes (like 144 times a second on a 144 Hz screen), for the smoothest motion. Off, it's 60 times a second, which is lighter on your computer."},
         {tab: 4, key: "Float", name: "Float", kind: "toggle", when: () => Settings.Animate,
-            help: "The box drifts gently, and leans a little toward the mouse. (Its tab at the edge of the screen stays still.)"},
+            help: "The box drifts gently, and leans a little toward the mouse. What's attached to it (a page open under it, the list beside it) and its tab at the edge of the screen stay still."},
         {tab: 4, key: "ScrollSmooth", name: "Scroll glide", kind: "slider", low: 1, high: 10, show: v => glides[v], when: () => Settings.Animate,
             help: "How long scrolling back through the conversation glides before it stops."},
         {tab: 4, key: "Appear", name: "Show & hide", kind: "choice", list: APPEAR_STYLES, when: () => Settings.Animate,
@@ -6254,4 +6279,12 @@ ToggleHidden(itemName, *) {
     if !Hidden
         Shown := {you: "", claude: "", live: false, streaming: false, thinking: false, work: ""}   ; show the current exchange again
     UpdateVisibility()
+    ; The page open under the box goes down to the taskbar while it's hidden, and comes back after.
+    if (Browser.hwnd && WinExist(Browser.hwnd)) {
+        if Hidden {
+            try WinMinimize(Browser.hwnd), Browser.min := true
+        } else if (!Minimized && WinGetMinMax(Browser.hwnd) = -1) {
+            try WinRestore(Browser.hwnd), Browser.min := false, Browser.set := ""
+        }
+    }
 }

@@ -74,8 +74,16 @@ RunVoiceButton(startOnly := false) {
 
         dictating := FindButton(hwnd, IsDictationStop)
         if (startOnly && dictating) {
-            Log("Dictation is already on")
-        } else if (!startOnly && !dictating && IniRead(STATE_FILE, "conversation", "active", 0) = 1) {
+            ; "Hey Claude" wants a new message, but dictation is still on: left on, or stuck finishing
+            ; one that went wrong (which used to leave "Hey Claude" doing nothing until it cleared).
+            ; It's stopped, and once Claude is ready again, started afresh below.
+            Log("Dictation was already on, so it's being stopped to start afresh")
+            PressButton(dictating.el)
+            if !WaitFor(() => FindButton(hwnd, n => n == "Dictate"), 6000)
+                throw Error("Claude's dictation seems stuck (it didn't stop). Click the mic in Claude's message box, then try again.")
+            dictating := ""
+        }
+        if (!startOnly && !dictating && IniRead(STATE_FILE, "conversation", "active", 0) = 1) {
             ; A "Hey Claude" conversation is pausing between messages; this press ends it.
             IniWrite(0, STATE_FILE, "conversation", "active")
             Log("Ended the conversation")
