@@ -41,7 +41,9 @@ OpenClaude() {
 FindClaudeWindow() {
     best := 0, bestArea := 0
     for hwnd in WinGetList("ahk_exe claude.exe ahk_class Chrome_WidgetWin_1") {
-        if (WinGetTitle(hwnd) = "")
+        ; (not untitled ones, nor see-through ones that can't be clicked, like the layer Claude puts over
+        ; all the screens when it uses the computer: that one's the biggest, but it has no buttons)
+        if (WinGetTitle(hwnd) = "" || WinGetExStyle(hwnd) & 0x08000020)   ; WS_EX_NOACTIVATE | WS_EX_TRANSPARENT
             continue
         WinGetPos(, , &w, &h, hwnd)
         if (w * h > bestArea)

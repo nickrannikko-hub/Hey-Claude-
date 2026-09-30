@@ -4,8 +4,9 @@
 ;
 ; Chat and Cowork page: toggles voice mode in the chat that's showing.
 ; Code page, or anywhere voice mode isn't available: toggles dictation, which types what you
-; say into the message box. Dictation ends by itself once you've been quiet for 2 seconds,
-; then the message is sent. Pressing the button again ends dictation right away and sends it too.
+; say into the message box. Dictation ends by itself once you've been quiet for 2 seconds
+; (3.5 once you've been talking a while, so a pause to think doesn't cut you off), then the
+; message is sent. Pressing the button again ends dictation right away and sends it too.
 ;
 ; It keeps the conversation going: once Claude has finished replying, it beeps and listens again
 ; for your next message. The conversation ends when you:
@@ -27,7 +28,9 @@
 #NoTrayIcon
 
 ; ---- Settings ---------------------------------------------------------------
-SILENCE_MS     := 2000    ; end dictation after this much quiet (milliseconds)
+SILENCE_MS     := 2000    ; end dictation after this much quiet (milliseconds)...
+LONG_SILENCE_MS := 3500   ; ...or this much, once you've been talking LONG_TALK_MS: a longer message has pauses to think in
+LONG_TALK_MS   := 6000    ; it ("um, what I noticed is...": at 2 s, those cut it off and sent half of it)
 FIRST_WORDS_MS := 7000    ; end dictation if you haven't started talking within this long
 VOICE_LEVEL    := 0.02    ; mic level that counts as talking (0 to 1), at the least: talking also has to be well above
                           ; the room's own noise (see WatchForSilence). Raise it if background noise keeps dictation going
@@ -51,6 +54,9 @@ STATE_FILE := A_Temp "\claude-voice-on-off.ini"                 ; shared with cl
 ; Windows' usual 20, so nothing hangs that long (like "Hey Claude" not hearing you meanwhile).
 UIA := ComObject("{e22ad333-b25f-460c-83d0-0581107395c9}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")   ; CUIAutomation8
 try ComCall(63, ComObjQuery(UIA, "{34723aff-0c9d-49d0-9896-7ab52df8cd8a}"), "uint", 4000)   ; IUIAutomation2 TransactionTimeout
+; And pressing a button doesn't first move the keyboard focus to it, which Windows does by default:
+; that means bringing Claude's window forward (out of a game), and waiting on it if it can't come.
+try ComCall(59, ComObjQuery(UIA, "{34723aff-0c9d-49d0-9896-7ab52df8cd8a}"), "int", 0)   ; IUIAutomation2 AutoSetFocus
 UIA_BUTTON := 50000, UIA_EDIT := 50004, UIA_RADIO := 50013, UIA_TEXT := 50020, UIA_GROUP := 50026
 LogLines := []
 CameFrom := 0      ; the window that was in front when the button started (see OpenClaude)
@@ -72,11 +78,17 @@ RunVoiceButton(startOnly := false) {
     try {
         hwnd := OpenClaude()
         Log("Claude is in front")
-        ; Right after launch the page needs a moment to load.
+        ; Right after launch the page needs a moment to load. (Loading, it's given a moment more to
+        ; settle before voice mode's button is clicked, see StartVoice; already there, it isn't.)
+        looked := A_TickCount
         if !WaitFor(() => FindByPrefix(hwnd, UIA_RADIO, "Chat and Cowork"), 20000)
             throw Error("Couldn't read Claude's window. It may still be loading, so try the button again.")
+        loading := A_TickCount - looked > 200
 
-        dictating := FindButton(hwnd, IsDictationStop)
+        ; One look at Claude's buttons, for all the checks below (each look over its window takes a
+        ; moment, and it was taking eight, one after another, before voice mode came on).
+        buttons := GetElements(hwnd, UIA_BUTTON)
+        dictating := FirstNamed(buttons, IsDictationStop)
         if (startOnly && dictating) {
             ; "Hey Claude" wants a new message, but dictation is still on: left on, or stuck finishing
             ; one that went wrong (which used to leave "Hey Claude" doing nothing until it cleared).
@@ -85,7 +97,7 @@ RunVoiceButton(startOnly := false) {
             PressButton(dictating.el)
             if !WaitFor(() => FindButton(hwnd, n => n == "Dictate"), 6000)
                 throw Error("Claude's dictation seems stuck (it didn't stop). Click the mic in Claude's message box, then try again.")
-            dictating := ""
+            dictating := "", buttons := GetElements(hwnd, UIA_BUTTON)
         }
         if (!startOnly && !dictating && IniRead(STATE_FILE, "conversation", "active", 0) = 1) {
             ; A "Hey Claude" conversation is pausing between messages; this press ends it.
@@ -96,7 +108,7 @@ RunVoiceButton(startOnly := false) {
             ToggleDictation(hwnd)
         } else if dictating {
             ToggleDictation(hwnd)
-        } else if VoiceIsOn(hwnd) {
+        } else if VoiceIsOn(hwnd, buttons) {
             if startOnly
                 Log("Voice mode is already on")
             else
@@ -104,9 +116,12 @@ RunVoiceButton(startOnly := false) {
         } else {
             ; Wait for the message box's mic buttons, so a page that's still loading
             ; isn't mistaken for one without voice mode.
-            WaitFor(() => FindButton(hwnd, IsMicButton), 8000)
-            if (voiceBtn := FindButton(hwnd, n => n == "Use voice mode")) {
-                StartVoice(hwnd, voiceBtn)
+            if !FirstNamed(buttons, IsMicButton) {
+                WaitFor(() => FindButton(hwnd, IsMicButton), 8000)
+                buttons := GetElements(hwnd, UIA_BUTTON), loading := true
+            }
+            if (voiceBtn := FirstNamed(buttons, n => n == "Use voice mode")) {
+                StartVoice(hwnd, voiceBtn, buttons, loading)
             } else {
                 Log("Voice mode isn't available here, so using dictation")
                 ToggleDictation(hwnd)
@@ -293,15 +308,16 @@ StartDictation(hwnd, dictateBtn) {
         SoundBeep(1200, 80)
 }
 
-; Ends dictation once you've been quiet for SILENCE_MS after talking, or if you haven't started
-; talking within firstWordsMs, or after MAX_TALK_MS whatever happens. Talking is what's louder than
+; Ends dictation once you've been quiet for SILENCE_MS after talking (LONG_SILENCE_MS once you've
+; been talking LONG_TALK_MS), or if you haven't started talking within firstWordsMs, or after
+; MAX_TALK_MS whatever happens. Talking is what's louder than
 ; VOICE_LEVEL and well above the room's own noise: the quietest moment of the last two seconds
 ; (there are gaps between words even while you talk), so a noisy room (a fan, a video playing)
 ; doesn't sound like talking that never ends. Returns how it ended ("quiet", "no talking", "too
 ; long", or "stopped" when something else ended it) and whether any talking was heard.
 WatchForSilence(hwnd, firstWordsMs) {
     meter := OpenMicMeter()
-    start := A_TickCount, lastVoice := 0, lastCheck := A_TickCount
+    start := A_TickCount, lastVoice := 0, firstVoice := 0, lastCheck := A_TickCount
     quietMax := 0.0, voiceMax := 0.0, recent := []
     loop {
         Sleep 100
@@ -313,7 +329,7 @@ WatchForSilence(hwnd, firstWordsMs) {
         for v in recent
             noise := Min(noise, v)
         if (level >= Max(VOICE_LEVEL, Min(0.15, noise * 2.5)))
-            lastVoice := A_TickCount, voiceMax := Max(voiceMax, level)
+            lastVoice := A_TickCount, firstVoice := firstVoice || A_TickCount, voiceMax := Max(voiceMax, level)
         else
             quietMax := Max(quietMax, level)
         if (A_TickCount - start >= MAX_TALK_MS) {
@@ -322,8 +338,9 @@ WatchForSilence(hwnd, firstWordsMs) {
             break
         }
 
-        if (lastVoice && A_TickCount - lastVoice >= SILENCE_MS) {
-            Log("Quiet for " SILENCE_MS " ms after talking")
+        quietFor := QuietNeeded(lastVoice - firstVoice)
+        if (lastVoice && A_TickCount - lastVoice >= quietFor) {
+            Log("Quiet for " quietFor " ms after " (quietFor > SILENCE_MS ? Round((lastVoice - firstVoice) / 1000) " s of " : "") "talking")
             ended := "quiet"
             break
         }
@@ -349,6 +366,9 @@ WatchForSilence(hwnd, firstWordsMs) {
     }
     return {ended: ended, talked: lastVoice != 0}
 }
+
+; How long a quiet ends dictation, after talking for talkedMs (from the first word to the last).
+QuietNeeded(talkedMs) => talkedMs >= LONG_TALK_MS ? LONG_SILENCE_MS : SILENCE_MS
 
 ; Waits for your words to show up in the message box, then sends it with Enter.
 SendWhenTranscribed(hwnd, textBefore, timeoutMs) {
@@ -426,7 +446,7 @@ PressInMessageBox(hwnd, keys) {
 ; other text boxes can be there too, like a code file open next to the chat.
 PromptBox(hwnd) {
     for item in GetElements(hwnd, UIA_EDIT)
-        if (item.name == "Prompt" || item.name ~= "i)prompt to Claude|^Reply to Claude" || InStr(ElementClass(item.el), "ProseMirror"))
+        if (item.name == "Prompt" || item.name ~= "i)prompt to Claude|^Reply to Claude" || InStr(item.cls, "ProseMirror"))
             return item
     return ""
 }
@@ -454,9 +474,7 @@ OpenMicMeter() {
     devices := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")   ; MMDeviceEnumerator
     ComCall(4, devices, "int", 1, "int", 0, "ptr*", &p := 0)   ; GetDefaultAudioEndpoint(capture, console)
     mic := ComPtr(p)
-    iid := Buffer(16)
-    DllCall("ole32\CLSIDFromString", "wstr", "{C02216F6-8C67-4B5B-9D00-D008E73E0064}", "ptr", iid)   ; IAudioMeterInformation
-    ComCall(3, mic, "ptr", iid, "uint", 23, "ptr", 0, "ptr*", &p := 0)   ; Activate
+    ComCall(3, mic, "ptr", Guid("{C02216F6-8C67-4B5B-9D00-D008E73E0064}"), "uint", 23, "ptr", 0, "ptr*", &p := 0)   ; Activate(IAudioMeterInformation)
     return ComPtr(p)
 }
 
@@ -468,9 +486,13 @@ IsDictationStop(name) => name == "Stop dictation" || name == "Finish dictation"
 
 ; ---- Voice mode -------------------------------------------------------------
 
-StartVoice(hwnd, voiceBtn) {
-    before := ButtonNames(hwnd)
-    Sleep 400   ; let the chat finish settling before clicking
+; (seen: Claude's buttons, as just looked at; loading: the page was still loading a moment ago.)
+StartVoice(hwnd, voiceBtn, seen := "", loading := true) {
+    before := Map()
+    for item in (seen || GetElements(hwnd, UIA_BUTTON))
+        before[item.name] := true
+    if loading
+        Sleep 400   ; let the chat finish settling before clicking
     ; From behind a game, pressing it without the mouse is tried first (a real click needs Claude in front).
     if !(Behind && (PressButton(voiceBtn.el), WaitFor(() => FindButton(hwnd, IsVoiceModeControl) || !FindButton(hwnd, n => n == "Use voice mode"), 2500)))
         ClickEl(voiceBtn.el, hwnd)
@@ -529,16 +551,18 @@ StopVoice(hwnd) {
 
 ; Voice mode counts as on if its controls are showing, and off if "Use voice mode" is showing.
 ; Only when neither shows (like while the page loads) does it go by what the last press did.
-VoiceIsOn(hwnd) {
-    if (endBtn := FindButton(hwnd, IsEndVoiceButton)) {
+; (buttons: Claude's buttons, if they've just been looked at.)
+VoiceIsOn(hwnd, buttons := "") {
+    buttons := buttons || GetElements(hwnd, UIA_BUTTON)
+    if (endBtn := FirstNamed(buttons, IsEndVoiceButton)) {
         Log("Voice mode is on ('" endBtn.name "' is showing)")
         return true
     }
-    if FindButton(hwnd, IsVoiceModeControl) {
+    if FirstNamed(buttons, IsVoiceModeControl) {
         Log("Voice mode is on (its microphone button is showing)")
         return true
     }
-    if FindButton(hwnd, n => n == "Use voice mode") {
+    if FirstNamed(buttons, n => n == "Use voice mode") {
         Log("Voice mode is off ('Use voice mode' is showing)")
         if (IniRead(STATE_FILE, "voice", "on", 0) = 1)
             SaveState(false)   ; it was ended some other way, like clicking Stop
@@ -571,39 +595,49 @@ IsEndVoiceButton(name) {
 ; ---- Claude's sound -----------------------------------------------------------
 
 ; Windows' level meters for the sound Claude's app is playing, one per sound stream it has open.
-ClaudeSoundMeters() {
-    meters := []
-    devices := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")   ; MMDeviceEnumerator
-    ComCall(3, devices, "int", 0, "uint", 1, "ptr*", &p := 0)   ; EnumAudioEndpoints(speakers, active)
-    speakers := ComPtr(p)
-    ComCall(3, speakers, "uint*", &count := 0)                  ; GetCount
-    loop count {
-        try {
-            ComCall(4, speakers, "uint", A_Index - 1, "ptr*", &p := 0)   ; Item
-            device := ComPtr(p)
-            ComCall(3, device, "ptr", Guid("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}"), "uint", 23, "ptr", 0, "ptr*", &p := 0)   ; Activate(IAudioSessionManager2)
-            manager := ComPtr(p)
-            ComCall(5, manager, "ptr*", &p := 0)                 ; GetSessionEnumerator
-            sessions := ComPtr(p)
-            ComCall(3, sessions, "int*", &n := 0)                ; GetCount
-            loop n {
-                try {
-                    ComCall(4, sessions, "int", A_Index - 1, "ptr*", &p := 0)   ; GetSession
-                    session := ComPtr(p)
-                    ComCall(14, ComObjQuery(session, "{bfb7ff88-7239-4fc9-8fa2-07c950be9c6d}"), "uint*", &pid := 0)   ; IAudioSessionControl2.GetProcessId
-                    if (ProcessGetName(pid) = "claude.exe")
-                        meters.Push(ComObjQuery(session, "{C02216F6-8C67-4B5B-9D00-D008E73E0064}"))   ; IAudioMeterInformation
+ClaudeSoundMeters() => ClaudeAudio("{C02216F6-8C67-4B5B-9D00-D008E73E0064}")   ; IAudioMeterInformation
+
+; Something about each sound stream Claude's app has open (the interface iid of its audio session),
+; like its level meter or its volume, on every speaker; [] if Windows can't say.
+ClaudeAudio(iid) {
+    out := []
+    try {
+        devices := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")   ; MMDeviceEnumerator
+        ComCall(3, devices, "int", 0, "uint", 1, "ptr*", &p := 0)   ; EnumAudioEndpoints(speakers, active)
+        speakers := ComPtr(p)
+        ComCall(3, speakers, "uint*", &count := 0)                  ; GetCount
+        loop count {
+            try {
+                ComCall(4, speakers, "uint", A_Index - 1, "ptr*", &p := 0)   ; Item
+                device := ComPtr(p)
+                ComCall(3, device, "ptr", Guid("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}"), "uint", 23, "ptr", 0, "ptr*", &p := 0)   ; Activate(IAudioSessionManager2)
+                manager := ComPtr(p)
+                ComCall(5, manager, "ptr*", &p := 0)                 ; GetSessionEnumerator
+                sessions := ComPtr(p)
+                ComCall(3, sessions, "int*", &n := 0)                ; GetCount
+                loop n {
+                    try {
+                        ComCall(4, sessions, "int", A_Index - 1, "ptr*", &p := 0)   ; GetSession
+                        session := ComPtr(p)
+                        ComCall(14, ComObjQuery(session, "{bfb7ff88-7239-4fc9-8fa2-07c950be9c6d}"), "uint*", &pid := 0)   ; IAudioSessionControl2.GetProcessId
+                        if (ProcessGetName(pid) = "claude.exe")
+                            out.Push(ComObjQuery(session, iid))
+                    }
                 }
             }
         }
     }
-    return meters
+    return out
 }
 
+; A GUID (like "{...}") as Windows takes it, made once and kept.
 Guid(text) {
-    buf := Buffer(16)
-    DllCall("ole32\CLSIDFromString", "wstr", text, "ptr", buf)
-    return buf
+    static made := Map()
+    if !made.Has(text) {
+        made[text] := Buffer(16)
+        DllCall("ole32\CLSIDFromString", "wstr", text, "ptr", made[text])
+    }
+    return made[text]
 }
 
 ; ---- Claude's window ----------------------------------------------------------
@@ -611,7 +645,9 @@ Guid(text) {
 FindClaudeWindow() {
     best := 0, bestArea := 0
     for hwnd in WinGetList("ahk_exe claude.exe ahk_class Chrome_WidgetWin_1") {
-        if (WinGetTitle(hwnd) = "")
+        ; (not untitled ones, nor see-through ones that can't be clicked, like the layer Claude puts over
+        ; all the screens when it uses the computer: that one's the biggest, but it has no buttons)
+        if (WinGetTitle(hwnd) = "" || WinGetExStyle(hwnd) & 0x08000020)   ; WS_EX_NOACTIVATE | WS_EX_TRANSPARENT
             continue
         WinGetPos(, , &w, &h, hwnd)
         if (w * h > bestArea)
@@ -684,9 +720,7 @@ WakeAccessibility(hwnd) {
     target := hwnd
     try target := ControlGetHwnd("Chrome_RenderWidgetHostHWND1", hwnd)
     try SendMessage(0x3D, 0, 1, target)   ; WM_GETOBJECT, the ID Chromium treats as "a screen reader is here"
-    iid := Buffer(16)
-    DllCall("ole32\CLSIDFromString", "wstr", "{618736e0-3c3d-11cf-810c-00aa00389b71}", "ptr", iid)   ; IAccessible
-    if (DllCall("oleacc\AccessibleObjectFromWindow", "ptr", target, "uint", 0xFFFFFFFC, "ptr", iid, "ptr*", &acc := 0) = 0 && acc)
+    if (DllCall("oleacc\AccessibleObjectFromWindow", "ptr", target, "uint", 0xFFFFFFFC, "ptr", Guid("{618736e0-3c3d-11cf-810c-00aa00389b71}"), "ptr*", &acc := 0) = 0 && acc)   ; IAccessible
         ObjRelease(acc)
 }
 
@@ -718,19 +752,27 @@ class ComPtr {
     __Delete() => (this.Ptr && ObjRelease(this.Ptr))
 }
 
-; Returns every element of one type in the window, as {el, name}.
+; Returns every element of one type in the window, as {el, name, cls}.
 GetElements(hwnd, controlType) {
     ComCall(6, UIA, "ptr", hwnd, "ptr*", &p := 0)               ; ElementFromHandle
     return ElementsUnder(ComPtr(p), controlType)
 }
 
-; Returns every element of one type inside root, as {el, name}.
-ElementsUnder(root, controlType) {
+; Returns every element of one type inside root, as {el, name, cls}. Their names and classes come
+; along with the list, in one go: asking Claude's window about each element separately takes a
+; round trip each, and there can be a hundred of them.
+ElementsUnder(root, controlType, scope := 4) {   ; (scope: 4 for everything under root, 7 for root too)
+    static cache := 0
+    if !cache {
+        ComCall(20, UIA, "ptr*", &cache)   ; CreateCacheRequest, kept for good
+        ComCall(3, cache, "int", 30005)    ; AddProperty: name
+        ComCall(3, cache, "int", 30012)    ; AddProperty: class
+    }
     v := Buffer(24, 0)                                           ; VARIANT holding the control type
     NumPut("ushort", 3, v, 0), NumPut("int", controlType, v, 8)
     ComCall(23, UIA, "int", 30003, "ptr", v, "ptr*", &p := 0)    ; CreatePropertyCondition(ControlType)
     cond := ComPtr(p)
-    ComCall(6, root, "int", 4, "ptr", cond, "ptr*", &p := 0)     ; FindAll(descendants)
+    ComCall(8, root, "int", scope, "ptr", cond, "ptr", cache, "ptr*", &p := 0)   ; FindAllBuildCache
     found := ComPtr(p)
     ComCall(3, found, "int*", &count := 0)                       ; Length
     items := []
@@ -738,17 +780,25 @@ ElementsUnder(root, controlType) {
         try {
             ComCall(4, found, "int", A_Index - 1, "ptr*", &p := 0)   ; GetElement
             el := ComPtr(p)
-            ComCall(23, el, "ptr*", &bstr := 0)                     ; CurrentName
-            name := bstr ? StrGet(bstr, "UTF-16") : ""
-            DllCall("OleAut32\SysFreeString", "ptr", bstr)
-            items.Push({el: el, name: Trim(RegExReplace(name, "\s+", " "))})
+            items.Push({el: el, name: Trim(RegExReplace(CachedString(el, 55), "\s+", " ")), cls: CachedString(el, 62)})   ; CachedName, CachedClassName
         }
     }
     return items
 }
 
-FindButton(hwnd, test) {
-    for item in GetElements(hwnd, UIA_BUTTON)
+; One of an element's text properties as it came along with it (see ElementsUnder).
+CachedString(el, method) {
+    ComCall(method, el, "ptr*", &bstr := 0)
+    text := bstr ? StrGet(bstr, "UTF-16") : ""
+    DllCall("OleAut32\SysFreeString", "ptr", bstr)
+    return text
+}
+
+FindButton(hwnd, test) => FirstNamed(GetElements(hwnd, UIA_BUTTON), test)
+
+; The first of some elements (as GetElements gives them) whose name passes test, or "".
+FirstNamed(items, test) {
+    for item in items
         if test(item.name)
             return item
     return ""
@@ -759,13 +809,6 @@ FindByPrefix(hwnd, controlType, prefix) {
         if StartsWith(item.name, prefix)
             return item
     return ""
-}
-
-ElementClass(el) {
-    ComCall(30, el, "ptr*", &bstr := 0)   ; CurrentClassName
-    name := bstr ? StrGet(bstr, "UTF-16") : ""
-    DllCall("OleAut32\SysFreeString", "ptr", bstr)
-    return name
 }
 
 HasFocus(el) {
@@ -781,9 +824,7 @@ ButtonNames(hwnd) {
 }
 
 GetPattern(el, patternId, iid) {
-    guid := Buffer(16)
-    DllCall("ole32\CLSIDFromString", "wstr", iid, "ptr", guid)
-    ComCall(14, el, "int", patternId, "ptr", guid, "ptr*", &p := 0)   ; GetCurrentPatternAs
+    ComCall(14, el, "int", patternId, "ptr", Guid(iid), "ptr*", &p := 0)   ; GetCurrentPatternAs
     return p ? ComPtr(p) : ""
 }
 
@@ -810,29 +851,43 @@ PostClick(el, hwnd) {
     if !(hwnd && WinExist(hwnd))
         return false
     old := DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")   ; (real screen pixels, like UI Automation's)
+    at := SpotIn(hwnd, el)
+    DllCall("SetThreadDpiAwarenessContext", "ptr", old, "ptr")
+    if !at
+        return false
+    PostClickAt(hwnd, at, 30)
+    return true
+}
+
+; The middle of one of Claude's buttons or switches (el), in its window's inside (hwnd's client area,
+; as {x, y}), or "" if it isn't showing there.
+SpotIn(hwnd, el) {
     try {
         rect := Buffer(16, 0)
         ComCall(43, el, "ptr", rect)   ; CurrentBoundingRectangle
         left := NumGet(rect, 0, "int"), top := NumGet(rect, 4, "int"), right := NumGet(rect, 8, "int"), bottom := NumGet(rect, 12, "int")
         if (right <= left || bottom <= top)
-            return false
+            return ""
         pt := Buffer(8), NumPut("int", (left + right) // 2, "int", (top + bottom) // 2, pt)
         DllCall("ScreenToClient", "ptr", hwnd, "ptr", pt)
         x := NumGet(pt, 0, "int"), y := NumGet(pt, 4, "int")
         client := Buffer(16, 0), DllCall("GetClientRect", "ptr", hwnd, "ptr", client)
         if (x < 0 || y < 0 || x >= NumGet(client, 8, "int") || y >= NumGet(client, 12, "int"))
-            return false
-        spot := (y & 0xFFFF) << 16 | (x & 0xFFFF)
-        DllCall("PostMessage", "ptr", hwnd, "uint", 0x200, "ptr", 0, "ptr", spot)   ; WM_MOUSEMOVE
-        DllCall("PostMessage", "ptr", hwnd, "uint", 0x201, "ptr", 1, "ptr", spot)   ; WM_LBUTTONDOWN (MK_LBUTTON)
-        Sleep 30
-        DllCall("PostMessage", "ptr", hwnd, "uint", 0x202, "ptr", 0, "ptr", spot)   ; WM_LBUTTONUP
-        return true
-    } catch {
-        return false
-    } finally {
-        DllCall("SetThreadDpiAwarenessContext", "ptr", old, "ptr")
+            return ""
+        return {x: x, y: y}
     }
+    return ""
+}
+
+; A click at a spot in a window's inside (at, {x, y}), as click messages: the mouse moving there,
+; the button going down and, pauseMs later, up again.
+PostClickAt(hwnd, at, pauseMs := 0) {
+    xy := (at.y & 0xFFFF) << 16 | (at.x & 0xFFFF)
+    DllCall("PostMessage", "ptr", hwnd, "uint", 0x200, "ptr", 0, "ptr", xy)   ; WM_MOUSEMOVE
+    DllCall("PostMessage", "ptr", hwnd, "uint", 0x201, "ptr", 1, "ptr", xy)   ; WM_LBUTTONDOWN (MK_LBUTTON)
+    if pauseMs
+        Sleep pauseMs
+    DllCall("PostMessage", "ptr", hwnd, "uint", 0x202, "ptr", 0, "ptr", xy)   ; WM_LBUTTONUP
 }
 
 ; Presses a button through UI Automation: an on/off switch or a plain button. From behind a game,
@@ -890,6 +945,11 @@ WaitFor(check, timeoutMs) {
 
 StartsWith(text, prefix) => SubStr(text, 1, StrLen(prefix)) == prefix
 
+; The newest message shows when it was sent ("just now", "5 seconds ago", "1 minute ago"). That isn't
+; part of what was said, so it's left out (otherwise "See ya." would read as "See ya. 5 seconds ago").
+IsWhenLabel(text) => Trim(text) = ""
+    || text ~= "i)^\s*(just now|now|yesterday|a moment ago|an? (second|minute|hour|day|week|month|year) ago|\d+ (seconds?|minutes?|hours?|days?|weeks?|months?|years?) ago|\d{1,2}:\d{2}\s*([ap]m)?)\s*$"
+
 JoinNames(list) {
     text := ""
     for item in list
@@ -897,7 +957,7 @@ JoinNames(list) {
     return text = "" ? "(none)" : text
 }
 
-Log(msg) => LogLines.Push(FormatTime(, "HH:mm:ss") "  " msg)
+Log(msg) => LogLines.Push(FormatTime(, "HH:mm:ss") "." Format("{:03}", A_MSec) "  " msg)   ; (to the thousandth: where a slow start's time goes)
 
 WriteLog() {
     text := ""

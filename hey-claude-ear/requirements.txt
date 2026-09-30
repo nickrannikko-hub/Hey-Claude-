@@ -1,0 +1,9 @@
+# What the new "Hey Claude" ear (hey_claude_ear.py) needs, as tested. See "The new Hey Claude ear"
+# in README.md. Installed into a venv right here in the hey-claude-ear folder:
+#   py -m venv venv
+#   venv\Scripts\python -m pip install -r requirements.txt
+openwakeword==0.6.0
+faster-whisper==1.2.1
+onnxruntime==1.30.0
+sounddevice==0.5.6
+numpy==2.5.3

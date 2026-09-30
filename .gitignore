@@ -1,9 +1,18 @@
 # Personal files the scripts create next to themselves: logs (they include message text),
 # settings tuned to your voice and mic, your "Teach it my voice" recordings, the captions' notes of
-# when your messages were sent (they include your messages' words), and earlier caption versions
-# you've kept to switch back to.
+# when your messages were sent and where you cleared a chat (they include your messages' words),
+# the games the captions learned, and earlier caption versions you've kept to switch back to.
 *-log.txt
 *.ini
 *-times.txt
+*-cleared.txt
+*-games.txt
 hey-claude-voice-samples/
 captions-versions/
+
+# The new "Hey Claude" ear's own install (Python and its models, set up on each PC) and its
+# recordings of each "Hey Claude" it heard.
+hey-claude-ear/venv/
+hey-claude-ear/models/
+hey-claude-ear/clips/
+__pycache__/

@@ -1,24 +1,30 @@
 ; Say "Hey Claude" instead of pressing a button
 ;
-; Listens in the background for "Hey Claude" using Windows' built-in speech recognizer, which
-; runs offline on this PC. When it hears it, it does what the claude-voice-on-off-send.ahk button
-; does to start things: voice mode on the Chat and Cowork page, or dictation that sends itself on
-; the Code page. If voice mode or dictation is already on, it leaves them alone, so saying
-; "Hey Claude" in the middle of a voice conversation won't hang up.
+; Listens in the background for "Hey Claude", offline on this PC. When it hears it, it does what
+; the claude-voice-on-off-send.ahk button does to start things: voice mode on the Chat and Cowork
+; page, or dictation that sends itself on the Code page. If voice mode or dictation is already on,
+; it leaves them alone, so saying "Hey Claude" in the middle of a voice conversation won't hang up.
 ;
-; Say "Hey Claude", pause, and start talking at the beep.
+; Say "Hey Claude" on its own, pause, and start talking at the beep.
+;
+; The listening itself is done by the new ear in the hey-claude-ear folder (see USE_NEW_EAR): it
+; only counts "Hey Claude" said on its own, with a pause before and after it, and Whisper has to
+; write it down as just "Hey Claude". So talking about Claude ("So Claude, what do you think",
+; "I said hey Claude and...") doesn't set it off. Its notes are in hey-claude-ear\ear-log.txt.
+; Without that folder it falls back to the old ear, Windows' own speech recognizer, which the
+; notes below about loudness, look-alikes and "Teach it my voice" are about.
 ;
 ; On the Code page, each "Hey Claude" is one message: it dictates, sends, and that's it. (For a
 ; back-and-forth that listens again after each reply, use the claude-voice-on-off-send.ahk button.)
 ;
 ; On the Chat and Cowork page, while voice mode is on (however it was started), it ends voice mode
 ; when you say a goodbye, like "Bye", "Okay, I'm done" or "See you later", once Claude has finished
-; saying its reply (at most 5 seconds after your goodbye is caught). If you say something new after
+; saying its reply (at most 3 seconds after your goodbye is caught). If you say something new after
 ; the goodbye instead, voice mode stays on. It goes by
 ; Claude's own transcript: during voice mode Claude adds what you say to the chat as "You said: ..."
 ; messages, and the newest one is checked about once a second. Only goodbyes are noted in the log.
 ; While voice mode is on, "Hey Claude" is ignored, so saying it to Claude can't disturb voice mode.
-; Voice mode also ends once it has just been sitting on "Listening" for 5 seconds: nobody talking,
+; Voice mode also ends once it has just been sitting on "Listening" for 3 seconds: nobody talking,
 ; nothing in the message box, and Claude not working on or reading out a reply.
 ;
 ; "Hey Claude" also has to be about as loud as you normally say it, so talk in the background
@@ -44,6 +50,8 @@
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; ListenerMain handles a second copy
 
 ; ---- Settings ---------------------------------------------------------------
+USE_NEW_EAR     := true   ; listen with the new ear (hey-claude-ear\hey_claude_ear.py) when it's there; false for the old one
+EAR_DIR         := A_ScriptDir "\hey-claude-ear"
 WAKE_PHRASE     := "hey claude"
 MIN_CONFIDENCE  := 0.85   ; how sure the recognizer must be (0 to 1). "Teach it my voice" sets this for you
 MIN_LOUDNESS    := 0.02   ; how loud "Hey Claude" must be (0 to 1), so background talk doesn't set it off. "Teach it my voice" sets this too
@@ -52,9 +60,9 @@ MIN_LOUDNESS    := 0.02   ; how loud "Hey Claude" must be (0 to 1), so backgroun
 VOICE_CHAT_MAX_SECONDS := 1.2   ; ...no longer than this ("Hey Claude" on its own is usually 0.5 to 0.8 s)
 VOICE_CHAT_PAUSE_MS := 400      ; ...followed by a pause at least this long, the way you wait for the beep (ms),
                                 ; and heard by Windows' free dictation as something like "Hey Claude" too
-GOODBYE_QUIET_MS := 1000  ; after a goodbye, end voice mode once Claude's voice has been quiet this long (ms)
-GOODBYE_MAX_MS  := 5000   ; ...but never later than this after the goodbye was caught, even if Claude is still talking
-VOICE_IDLE_MS   := 5000   ; end voice mode once it has just been "Listening" this long, with nobody talking (ms). 0 turns it off
+GOODBYE_QUIET_MS := 700   ; after a goodbye, end voice mode once Claude's voice has been quiet this long (ms)
+GOODBYE_MAX_MS  := 3000   ; ...but never later than this after the goodbye was caught, even if Claude is still talking
+VOICE_IDLE_MS   := 3000   ; end voice mode once it has just been "Listening" this long, with nobody talking (ms). 0 turns it off
 ; "Hey Claude" has to beat these in a second check, so chants like "Oh yeah, let's go!" don't set
 ; it off. None of them share a word with "Hey Claude", which would let the recognizer split it in two.
 LOOK_ALIKES := ["oh yeah", "yeah", "let's go", "okay", "alright", "come on", "what's up", "oh no", "no way",
@@ -73,6 +81,7 @@ SAMPLES_DIR     := A_ScriptDir "\hey-claude-voice-samples"     ; your recordings
 
 HeyLogLines := []
 Listener := ""
+EarPid := 0                                 ; the new ear, while it's running (see StartEar)
 Paused := false
 Busy := false
 LastDone := 0
@@ -104,8 +113,10 @@ ListenerMain() {
     A_IconTip := 'Listening for "Hey Claude"'
     A_TrayMenu.Delete()
     A_TrayMenu.Add("Pause listening", TogglePause)
-    A_TrayMenu.Add("Teach it my voice...", (*) => TeachMyVoice())
-    A_TrayMenu.Add("Windows voice training...", (*) => WindowsVoiceTraining())
+    if !UseNewEar() {   ; (these tune the old ear; the new one doesn't need them)
+        A_TrayMenu.Add("Teach it my voice...", (*) => TeachMyVoice())
+        A_TrayMenu.Add("Windows voice training...", (*) => WindowsVoiceTraining())
+    }
     A_TrayMenu.Add()
     A_TrayMenu.Add("Exit", (*) => ExitApp())
 
@@ -114,15 +125,22 @@ ListenerMain() {
         for line in StrSplit(RTrim(FileRead(HEY_LOG_FILE, "UTF-8"), "`r`n"), "`n", "`r")
             HeyLogLines.Push(line)
     }
-    MIN_CONFIDENCE := Number(IniRead(HEY_SETTINGS, "voice", "MinConfidence", MIN_CONFIDENCE))
-    MIN_LOUDNESS := Number(IniRead(HEY_SETTINGS, "voice", "MinLoudness", MIN_LOUDNESS))
-    try {
-        Listener := StartListening()
-    } catch as err {
-        MsgBox("Couldn't start listening for 'Hey Claude':`n" err.Message, "Hey Claude", "Icon!")
-        ExitApp
+    if UseNewEar() {
+        OnMessage(DllCall("RegisterWindowMessage", "str", "ClaudeHeyClaude.Ear", "uint"), EarHeard)
+        OnMessage(DllCall("RegisterWindowMessage", "str", "ClaudeHeyClaude.Talking", "uint"), EarTalking)
+        StartEar()
+        HeyLog("Listening for 'hey claude' with the new ear (its own notes are in hey-claude-ear\ear-log.txt)")
+    } else {
+        MIN_CONFIDENCE := Number(IniRead(HEY_SETTINGS, "voice", "MinConfidence", MIN_CONFIDENCE))
+        MIN_LOUDNESS := Number(IniRead(HEY_SETTINGS, "voice", "MinLoudness", MIN_LOUDNESS))
+        try {
+            Listener := StartListening()
+        } catch as err {
+            MsgBox("Couldn't start listening for 'Hey Claude':`n" err.Message, "Hey Claude", "Icon!")
+            ExitApp
+        }
+        HeyLog(Format("Listening for '{}' on {} (needs {:.2f} sure, loudness {:.3f})", WAKE_PHRASE, Listener.reco.AudioInput.GetDescription(), MIN_CONFIDENCE, MIN_LOUDNESS))
     }
-    HeyLog(Format("Listening for '{}' on {} (needs {:.2f} sure, loudness {:.3f})", WAKE_PHRASE, Listener.reco.AudioInput.GetDescription(), MIN_CONFIDENCE, MIN_LOUDNESS))
     ToolTip('"Hey Claude" is on')
     SetTimer(() => ToolTip(), -2000)
     SetTimer(VoiceWatch, 1000)
@@ -149,6 +167,61 @@ OtherListener() {
             return hwnd
     return 0
 }
+
+; ---- The new ear ------------------------------------------------------------------
+
+; Whether to listen with the new ear: it's switched on, and it's there (its own Python, in its folder).
+UseNewEar() => USE_NEW_EAR && FileExist(EAR_DIR "\venv\Scripts\pythonw.exe") && FileExist(EAR_DIR "\hey_claude_ear.py")
+
+; Starts the new ear, which exits by itself when this script does.
+StartEar() {
+    global EarPid
+    Run(Format('"{1}\venv\Scripts\pythonw.exe" "{1}\hey_claude_ear.py" --parent {2}', EAR_DIR, DllCall("GetCurrentProcessId")), EAR_DIR, "Hide", &pid)
+    EarPid := pid
+    SetTimer(CheckEar, 5000)
+}
+
+StopEar() {
+    global EarPid
+    SetTimer(CheckEar, 0)
+    if EarPid   ; (with the Python it starts)
+        try RunWait("taskkill /T /F /PID " EarPid, , "Hide")
+    EarPid := 0
+}
+
+; Starts the new ear again if it stopped.
+CheckEar() {
+    if (EarPid && !Paused && !ProcessExist(EarPid)) {
+        HeyLog("The new ear stopped; starting it again")
+        StartEar()
+    }
+}
+
+; The new ear heard "Hey Claude" on its own: wParam is how long it was (ms), lParam the "hey claude"
+; model's score out of 1000.
+EarHeard(wParam, lParam, *) {
+    SetTimer(() => EarWake(wParam, lParam / 1000), -1)   ; (on its own, so the message isn't held up)
+    return 0
+}
+
+EarWake(ms, score) {
+    global Busy
+    heard := Format("'Hey Claude' (said on its own, {:.2f} s, model {:.2f})", ms / 1000, score)
+    if Paused
+        return
+    if VoiceListening {   ; voice mode is already on; don't touch it, even if you say "Hey Claude" to it
+        HeyLog("Ignored " heard ": voice mode is already on")
+        return
+    }
+    if (Busy || A_TickCount - LastDone < 1500) {
+        HeyLog("Ignored " heard ": already starting or dictating")
+        return
+    }
+    Busy := true
+    Wake(heard)
+}
+
+; ---- The old ear -------------------------------------------------------------------
 
 ; Sets up Windows' speech recognizer to listen for just the wake phrase.
 ; audioFile is only for testing; normally it listens to the microphone.
@@ -360,8 +433,8 @@ SoundsLikeWake(text) {
 ; Does what "Hey Claude" does, once it has passed every check (heard: what was heard, for the log).
 Wake(heard) {
     global Busy, LastDone
+    TellCaptions()   ; (first: the captions show it straight away)
     HeyLog("Heard " heard ", starting")
-    TellCaptions()
     started := A_TickCount
     try WakeAction()
     ; What the voice button did, each step with its time, so a slow or failed start shows up here.
@@ -476,7 +549,7 @@ Loudness(ptr, bytes, rate, channels, bits) {
 ; During voice mode Claude adds what you say to the chat as "You said: ..." messages.
 VoiceWatch() {
     global VoiceListening, LastSaid, Candidate
-    if (Busy || Paused || Teaching || !Listener)
+    if (Busy || Paused || Teaching || !(Listener || EarPid))
         return
     ; Voice mode is on when its microphone button shows, however voice mode was started.
     on := false, hwnd := 0
@@ -503,19 +576,26 @@ VoiceWatch() {
         return
     s := VoiceSession
     ; Claude writing its reply counts as activity, and so does reading it out: allow about
-    ; 2.5 words a second from the last time the reply grew.
+    ; 2.5 words a second from the last time the reply grew. (A reply that was coming in turning
+    ; into a finished message with the same words hasn't grown.)
     if (s && msgs.reply != s.lastReply) {
-        s.lastReply := msgs.reply, s.lastActivity := A_TickCount, s.awaitingReply := false
-        s.busyUntil := A_TickCount + StrSplit(RegExReplace(msgs.reply, "^[^|]*\|"), " ").Length * 400
+        words := RegExReplace(msgs.reply, "^[^|]*\|"), grew := words != RegExReplace(s.lastReply, "^[^|]*\|")
+        s.lastReply := msgs.reply
+        if grew {
+            s.replyAt := A_TickCount, s.awaitingReply := false
+            s.busyUntil := A_TickCount + StrSplit(words, " ").Length * 400
+        }
     }
     ; While you talk, your words show up in the message box.
+    ; (only without the new ear, which hears you talking itself: text left in the message box could
+    ; otherwise keep voice mode on forever)
     try {
-        if (s && PromptText(hwnd) != "")
-            s.lastActivity := A_TickCount
+        if (s && !EarPid && PromptText(hwnd) != "")
+            s.lastYou := A_TickCount
     }
     said := msgs.said
     if (s && said != LastSaid)
-        s.lastActivity := A_TickCount
+        s.lastYou := A_TickCount
     ; Judge a new message only once it has stayed the same for a second, in case Claude is still
     ; writing it down (so "I'll see you in the code" isn't cut off at "I'll see you").
     if (said != LastSaid && said = Candidate) {
@@ -535,11 +615,25 @@ VoiceWatch() {
 ; times a second (your mic, and the sound Claude's app plays); the chat is checked by VoiceWatch.
 StartVoiceSession() {
     global VoiceSession
-    VoiceSession := {start: A_TickCount, lastActivity: A_TickCount, awaitingReply: false, awaitingSince: 0,
-        busyUntil: 0, lastReply: "", mic: "", claude: [], claudeAt: 0}
-    try VoiceSession.mic := OpenMicMeter()
+    ; (lastYou: when you last talked, with a few seconds more to start; awaitingReply: you said something
+    ; and Claude hasn't started replying, since awaitingSince; busyUntil: about when Claude will have
+    ; read its reply out; replyAt: when its reply last grew; claudeSoundAt: when Claude was last heard,
+    ; and claudeLevel how loud lately, for the log, as notedAt is when it last noted why it stays on;
+    ; mic and levels: your mic without the new ear; claude: Claude's sound meters, found at claudeAt)
+    VoiceSession := {lastYou: A_TickCount + 4000, awaitingReply: false, awaitingSince: 0, busyUntil: 0, lastReply: "", replyAt: 0,
+        claudeSoundAt: 0, claudeLevel: 0.0, notedAt: 0, mic: "", levels: [], claude: [], claudeAt: 0}
+    if !EarPid   ; (the new ear says when you're talking instead: see EarTalking)
+        try VoiceSession.mic := OpenMicMeter()
     try VoiceSession.lastReply := NewestMessages(FindClaudeWindow()).reply
     SetTimer(VoiceSoundWatch, 200)
+}
+
+; The new ear hears someone talking (it says so a few times a second while they do). It hears talking
+; itself, not just sound, so a noisy room (a game, a fan) doesn't keep voice mode on forever.
+EarTalking(*) {
+    if (s := VoiceSession)
+        s.lastYou := A_TickCount
+    return 0
 }
 
 StopVoiceSession() {
@@ -557,35 +651,63 @@ VoiceSoundWatch() {
         try s.claude := ClaudeSoundMeters()
         s.claudeAt := now
     }
+    loudest := 0.0
     for meter in s.claude {
         try {
             ComCall(3, meter, "float*", &peak := 0)   ; GetPeakValue
+            loudest := Max(loudest, peak)
             if (peak > 0.01)
-                s.lastActivity := now, s.awaitingReply := false
+                s.claudeSoundAt := now, s.awaitingReply := false
         }
     }
-    if s.mic {
+    s.claudeLevel := Max(s.claudeLevel * 0.9, loudest)   ; (for the log)
+    if s.mic {   ; (only without the new ear)
         try {
+            ; Talking is louder than VOICE_LEVEL and well above the room's own noise: the quietest
+            ; moment of the last two seconds, as in WatchForSilence.
             ComCall(3, s.mic, "float*", &peak := 0)
-            if (peak >= VOICE_LEVEL)
-                s.lastActivity := now
+            s.levels.Push(peak)
+            if (s.levels.Length > 10)
+                s.levels.RemoveAt(1)
+            if (peak >= Max(VOICE_LEVEL, Min(0.15, Min(s.levels*) * 2.5)))
+                s.lastYou := now
         }
     }
+    ; Checked here, five times a second, rather than only after a read of Claude's window (see
+    ; VoiceWatch), which can fail again and again and would leave voice mode on.
+    CheckVoiceIdle()
 }
 
-; Ends voice mode once it has just been "Listening" for VOICE_IDLE_MS: nobody talking, nothing in
-; the message box, and Claude not working on or reading out a reply. After you say something,
-; Claude gets up to 15 seconds to start replying before that counts as idle.
+; Ends voice mode once you've been quiet for VOICE_IDLE_MS and Claude's done: not about to reply (it
+; gets up to 15 seconds after you say something), and not reading its reply out. You talking is what
+; the new ear hears (see EarTalking), or the mic without it, or a new "You said" message; nothing
+; else counts, so nothing else can keep voice mode on. Claude talking is its own sound, but only
+; around when its reply should take to say (about 2.5 words a second, busyUntil), or within 30 s of
+; you last talking: a sound from Claude that never stops (another sound the app plays, a stuck
+; meter) can't keep it on forever either.
 CheckVoiceIdle() {
     s := VoiceSession
     if (!s || !VOICE_IDLE_MS || PendingGoodbye)
         return
     now := A_TickCount
-    if ((s.awaitingReply && now - s.awaitingSince < 15000) || now < s.busyUntil)
+    quiet := now - s.lastYou
+    waiting := s.awaitingReply && now - s.awaitingSince < 15000
+    ; (Claude heard lately: while its reply should still be going, or for up to 30 s after you last
+    ; talked, in case its reply can't be read at all)
+    speaking := now - s.claudeSoundAt < VOICE_IDLE_MS && (now < s.busyUntil + 8000 || now - s.lastYou < 30000)
+    reading := now < s.busyUntil && s.claudeSoundAt < s.replyAt   ; (Claude's sound can't be heard at all: the guess instead)
+    if (quiet < VOICE_IDLE_MS || waiting || speaking || reading) {
+        ; (noted every 10 s while you're quiet and it stays on, so the log says why)
+        if (quiet >= VOICE_IDLE_MS && now - s.notedAt > 10000) {
+            s.notedAt := now
+            HeyLog(Format("Quiet for {} s, but voice mode stays on while {} (Claude's sound level {:.3f})", quiet // 1000,
+                waiting ? "Claude gets its reply started" : speaking ? "Claude is talking" : Format("Claude reads its reply out (about {} s more)", (s.busyUntil - now) // 1000),
+                s.claudeLevel))
+        }
         return
-    if (now - s.lastActivity < VOICE_IDLE_MS)
-        return
-    HeyLog("Voice mode was just listening for " VOICE_IDLE_MS // 1000 " seconds with nobody talking, so it was ended")
+    }
+    HeyLog(Format("Voice mode was just listening for {} seconds with nobody talking, so it was ended (Claude last heard {}, its reply last grew {}; sound level {:.3f})",
+        VOICE_IDLE_MS // 1000, s.claudeSoundAt ? (now - s.claudeSoundAt) // 1000 " s ago" : "never", s.replyAt ? (now - s.replyAt) // 1000 " s ago" : "never", s.claudeLevel))
     StopVoiceSession()
     GoodbyeAction()
 }
@@ -608,11 +730,6 @@ OnYouSaid(said) {
         HeyLog("You said something during voice mode (" StrSplit(Trim(text), " ").Length " words, not a goodbye)")
     }
 }
-
-; The newest message shows when it was sent ("just now", "5 seconds ago", "1 minute ago"). That label
-; isn't part of what you said, so it's left out; otherwise "See ya." would read as "See ya. 5 seconds ago".
-IsTimeLabel(text) => Trim(text) = ""
-    || text ~= "i)^\s*(just now|now|yesterday|a moment ago|an? (second|minute|hour|day|week|month|year) ago|\d+ (seconds?|minutes?|hours?|days?|weeks?|months?|years?) ago|\d{1,2}:\d{2}\s*([ap]m)?)\s*$"
 
 StartGoodbye(message) {
     global PendingGoodbye
@@ -662,27 +779,31 @@ NewestYouSaid(hwnd) => NewestMessages(hwnd).said
 ; the same thing twice still counts as new. Each message is a group named like "Message 38 of 40",
 ; holding a short "You said: ..." or "Claude responded: ..." label, which is only the first
 ; sentence, followed by the full text. The "of 40" part is left off, since it changes whenever a
-; message is added.
+; message is added. A reply still coming in (in voice mode, all the while Claude says it out loud)
+; is a group named "Currently streaming message" instead, with no label: it's Claude's reply too,
+; as "Streaming|..." (missing it, voice mode was ended in the middle of Claude's reply, as nobody
+; seemed to be talking).
 NewestMessages(hwnd) {
     said := "", reply := ""
     groups := GetElements(hwnd, UIA_GROUP)
     i := groups.Length
     while (i >= 1 && (said = "" || reply = "")) {
         g := groups[i--]
-        if !(g.name ~= "^Message \d+ of \d+")
+        streaming := g.name == "Currently streaming message"
+        if !(streaming || g.name ~= "^Message \d+ of \d+")
             continue
         texts := ElementsUnder(g.el, UIA_TEXT)
         if !texts.Length
             continue
         label := texts[1].name
-        mine := StartsWith(label, "You said: ")
-        if (mine ? said != "" : (!StartsWith(label, "Claude responded: ") || reply != ""))
+        mine := !streaming && StartsWith(label, "You said: ")
+        if (mine ? said != "" : (reply != "" || !streaming && !StartsWith(label, "Claude responded: ")))
             continue
         full := ""
         for t in texts
-            if (A_Index > 1 && !IsTimeLabel(t.name))
+            if ((streaming || A_Index > 1) && !IsWhenLabel(t.name))   ; (see claude-voice-on-off-send.ahk)
                 full .= (full = "" ? "" : " ") t.name
-        text := RegExReplace(g.name, " of \d+.*$") "|" (full != "" ? full : RegExReplace(label, "^(You said|Claude responded): "))
+        text := (streaming ? "Streaming" : RegExReplace(g.name, " of \d+.*$")) "|" (full != "" ? full : RegExReplace(label, "^(You said|Claude responded): "))
         if mine
             said := text
         else
@@ -807,7 +928,10 @@ SaveAudio(result, path) {
 TogglePause(itemName, *) {
     global Paused
     Paused := !Paused
-    Listener.reco.State := Paused ? 0 : 1   ; 0 lets go of the microphone
+    if UseNewEar()
+        Paused ? StopEar() : StartEar()   ; (stopping it lets go of the microphone)
+    else
+        Listener.reco.State := Paused ? 0 : 1   ; 0 lets go of the microphone
     A_TrayMenu.ToggleCheck(itemName)
     A_IconTip := Paused ? 'Paused: not listening for "Hey Claude"' : 'Listening for "Hey Claude"'
     HeyLog(Paused ? "Paused" : "Listening again")
@@ -824,11 +948,17 @@ WindowsVoiceTraining() {
         Listener.reco.State := 1
 }
 
-; Keeps the last 300 lines in claude-hey-claude-log.txt.
+; Adds a line to claude-hey-claude-log.txt, which keeps the last 300 or so: each line is added to the
+; end, and once there are 400 the file is written again with just the newest 300. (Writing the whole
+; file for every line took a moment, and "Hey Claude" notes a line just before it starts.)
 HeyLog(msg) {
-    HeyLogLines.Push(FormatTime(, "yyyy-MM-dd HH:mm:ss") "  " msg)
-    while (HeyLogLines.Length > 300)
-        HeyLogLines.RemoveAt(1)
+    line := FormatTime(, "yyyy-MM-dd HH:mm:ss") "." Format("{:03}", A_MSec) "  " msg   ; (to the thousandth, so how long "Hey Claude" takes to start shows)
+    HeyLogLines.Push(line)
+    if (HeyLogLines.Length <= 400) {
+        try FileAppend(line "`n", HEY_LOG_FILE, "UTF-8")
+        return
+    }
+    HeyLogLines.RemoveAt(1, HeyLogLines.Length - 300)
     text := ""
     for line in HeyLogLines
         text .= line "`n"
