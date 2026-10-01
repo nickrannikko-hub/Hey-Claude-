@@ -140,7 +140,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.7.6"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.7.7"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -749,7 +749,36 @@ ReadClaude(st) {
         st.pageAt := A_TickCount
         try page := PageOf(hwnd, &tabs)
     }
+    if (hwnd && StartsWith(now.convo, "code|"))
+        SessionPage(hwnd, now, &page, &tabs, st)
     return {hwnd: hwnd, now: now, page: page, tabs: tabs, bar: ModelBarOf(now.buttons)}
+}
+
+; A Cowork session, on Claude's Chat and Cowork page, has its title named as a session on the Code
+; page has ("Weekly report, rename session", see SidebarRows): for a session showing (now.convo, like
+; "code|Weekly report"), which page it's on goes by Claude's page switch (see PageOf), checked with the
+; read (page and tabs, if they weren't) the first time the title shows, and kept. A Cowork session's
+; convo is made "chat|…", and now.cowork true. (Taken for a Code session, the box went to the Code
+; page with each read and back with each check of the page, and its Code list got the Chat and Cowork
+; page's chats.) A later check that says otherwise counts only the second time running, a second and
+; a half on: just after Claude switches pages, its switch can say the new page while the title is
+; still the old one's.
+SessionPage(hwnd, now, &page, &tabs, st) {
+    static pages := Map()   ; which page each session's title is on, as {page, odd}
+    title := SubStr(now.convo, 6)
+    if !pages.Has(title) {
+        if (page = "")
+            try page := PageNow.Call(hwnd, &tabs), st.pageAt := A_TickCount
+        if (page != "")
+            pages[title] := {page: page, odd: 0}
+    } else if (page != "") {
+        s := pages[title]
+        s.odd := page = s.page ? 0 : s.odd + 1
+        if (s.odd >= 2)
+            s.page := page, s.odd := 0
+    }
+    if (pages.Has(title) && pages[title].page = "chat")
+        now.convo := "chat|" title, now.cowork := true
 }
 
 ; What Claude's buttons under its message box (among buttons, as read, see ButtonsAround) say about
@@ -839,9 +868,10 @@ Digest(read) {
         NoticePage(read.page)
     if (read.bar != "" && A_TickCount - ModelBars.setAt > 2500 && !ModelMenu) {   ; (not while you pick, or just after)
         ; (Only the Code page has Effort and Usage buttons; without them, the page the conversation's
-        ; on says, as a new Code session can have neither yet.)
-        f := StrSplit(read.bar, "|")
-        b := ModelBars.%(f[2] != "" || f[3] != "" || now.convo != "" && ConvPage(now.convo) = "code" ? "code" : "chat")%
+        ; on says, as a new Code session can have neither yet. A Cowork session, on the Chat and Cowork
+        ; page, is that page's whatever buttons it has, see ReadClaude.)
+        f := StrSplit(read.bar, "|"), cowork := now.HasOwnProp("cowork") && now.cowork
+        b := ModelBars.%((f[2] != "" || f[3] != "") && !cowork || now.convo != "" && ConvPage(now.convo) = "code" ? "code" : "chat")%
         if (f[1] != b.model || f[2] != b.effort || f[3] != b.usage) {
             b.model := f[1], b.effort := f[2], b.usage := f[3]
             if (Compacting.at && (pct := UsagePercent(f[3])) != "" && Compacting.from != "" && pct < Compacting.from)
@@ -1431,7 +1461,7 @@ PackRead(read) {
     text := "hwnd=" read.hwnd rs "page=" read.page rs "tabs=" read.tabs rs "bar=" read.bar
     for key in ["you", "claude", "work", "session", "convo", "prevYou", "prevClaude"]
         text .= rs key "=" (now.HasOwnProp(key) ? now.%key% : "")
-    for key in ["live", "streaming", "thinking", "working", "listening", "voice", "micLive", "partial", "away"]
+    for key in ["live", "streaming", "thinking", "working", "listening", "voice", "micLive", "partial", "away", "cowork"]
         text .= rs key "=" (now.HasOwnProp(key) && now.%key% ? 1 : 0)
     rows := ""
     for row in now.sessions
@@ -1460,7 +1490,7 @@ UnpackRead(text) {
                         list.Push(key = "sessions" ? {title: f[1], status: f.Length > 1 ? f[2] : ""} : {text: f[1], url: f.Length > 1 ? f[2] : ""})
                     }
                 now.%key% := list
-            case "live", "streaming", "thinking", "working", "listening", "voice", "micLive", "partial", "away":
+            case "live", "streaming", "thinking", "working", "listening", "voice", "micLive", "partial", "away", "cowork":
                 now.%key% := value = "1"
             default:
                 now.%key% := value
@@ -2253,7 +2283,8 @@ OldestFirst(list) {
 ; with what it's doing first, like "Running Monitor overlay UI" or "Idle General chat". Also the one
 ; showing (current), whose title has a rename button, like "General chat, rename chat" (or "...,
 ; rename session" on the Code page), and so which conversation is showing (convo, like
-; "chat|General chat"), or "" if there's no title to go by.
+; "chat|General chat"), or "" if there's no title to go by. (A Cowork session's is named as a Code
+; session's is: ReadClaude tells them apart.)
 SidebarRows(buttons) {
     titles := [], current := "", convo := ""
     for button in buttons {
