@@ -140,7 +140,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.7.2"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.7.3"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -256,6 +256,7 @@ Brush := 0, TextFormat := 0, CenterFormat := 0
 BoxGui := ""
 Page := ""                      ; which of Claude's pages it's on: "chat" (Chat and Cowork) or "code" ("" until known)
 SeenPage := {page: "", at: 0}   ; the page the reads of Claude's window last said it's on, and when
+ClaudeConvo := ""               ; the conversation Claude's window last showed (with a title), whatever the box shows (see OpenedYet)
 ; Where Claude's page switches were last seen (from the reads, see PageOf): {hwnd, chat: {x, y},
 ; code: {x, y}, w, h}, so switching pages clicks one straight away (see ClickTab) instead of first
 ; looking for it in Claude's window, which takes most of a second in a long conversation.
@@ -767,10 +768,12 @@ ModelBarOf(buttons) {
 
 ; Goes through a read of Claude's window (see ReadClaude): the box shows what's new in it.
 Digest(read) {
-    global Shown, LastChange, LastHwnd, Listening, Waiting, VoiceModeAt, VoiceMode, VoiceMicLive, PageAt, ClaudeWorking, TabSpots, HeyClaudeAt
+    global Shown, LastChange, LastHwnd, Listening, Waiting, VoiceModeAt, VoiceMode, VoiceMicLive, PageAt, ClaudeWorking, TabSpots, HeyClaudeAt, ClaudeConvo
     hwnd := read.hwnd, now := read.now
     LastHwnd := hwnd
-    NoteSidebar(now)   ; (whichever page it's of)
+    if (now.convo != "")
+        ClaudeConvo := now.convo
+    NoteSidebar(now, read.page != "" ? read.page : A_TickCount - SeenPage.at < 3000 ? SeenPage.page : "")   ; (whichever page it's of)
     ; Which page Claude is on, as last read: noted even while the box waits for Claude to switch, so
     ; a switch that didn't take is seen (see SwitchedYet). (Noted only after the wait, it never was:
     ; the box gave up waiting and went back, and the switch was never tried again.)
@@ -894,10 +897,14 @@ Digest(read) {
 ; conversation's title says it's on, and shown in the list beside the box if the box is on that page
 ; (see ShowSidebar). While Claude goes to another page, its sidebar and title can be of different
 ; pages for a moment: just then, a read only counts if the conversation showing is in its sidebar.
-NoteSidebar(now) {
-    if (now.convo = "")
+NoteSidebar(now, page := "") {
+    ; (Which page's it is: the conversation's, or with none showing yet, like a new chat, the page
+    ; Claude's window says it's on. Kept only for a titled conversation, the list read "Reading
+    ; Claude's sidebar…" on a new chat until you opened one of its chats in Claude yourself.)
+    onPage := now.convo != "" ? ConvPage(now.convo) : page
+    if (onPage = "")
         return
-    onPage := ConvPage(now.convo), key := now.session "|", has := false
+    key := now.session "|", has := now.convo = ""
     for row in now.sessions
         key .= row.status " " row.title "|", has := has || row.title == now.session
     if (onPage != SidebarPage.page)
@@ -1093,13 +1100,27 @@ OpenSession(title) {
                     if GameFront
                         return false
                     Invoke(button.el)
-                }
+                } else
+                    SetTimer(OpenedYet.Bind(title, button.el), -1600)   ; (checked: see OpenedYet)
                 ReadSoon()
                 return true
             }
         }
     }
     return false
+}
+
+; A moment after a chat or session (title) was opened with a click in Claude's sidebar (see
+; OpenSession): if Claude's window isn't showing it, it's pressed instead (el), through UI Automation.
+; (On a laptop, with Claude's window minimized or behind others, Claude didn't take the click, and
+; you had to open it in Claude yourself.)
+OpenedYet(title, el) {
+    Critical   ; (runs to the end: see ClickClaude)
+    if (ClaudeConvo != "" && StrSplit(ClaudeConvo, "|", , 2)[2] == title)
+        return
+    NoteEvent("opening '" title "' with a click didn't take; pressing it instead")
+    try PressInClaude(el, Invoke)
+    ReadSoon()
 }
 
 ; Going to a page (which), from the box or in Claude's own window: Claude opens the conversation it
@@ -8234,15 +8255,25 @@ OpenModelMenu() {
     Critical   ; (runs to the end: see ClickClaude)
     global ModelMenu
     hwnd := ClaudeToClick()
-    if !(hwnd && (btn := ClaudeButton(hwnd, "Model: ")) && ClickClaude(btn.el, hwnd)) {
-        NoteEvent("couldn't open Claude's model menu")
+    ; What's in Claude's window that looks like a menu's choices before the menu opens isn't in it
+    ; (like the Chat and Cowork switch on a new chat: taken for models, picking them switched Claude
+    ; between Chat and Cowork, back and forth).
+    pre := Map()
+    try for c in MenuReader.Call(hwnd)
+        pre[c.name] := true
+    if !(hwnd && (btn := ClaudeButton(hwnd, "Model: "))) {
+        NoteEvent("couldn't open Claude's model menu (" (!hwnd ? "Claude's window wasn't found" : "its Model button wasn't found") ")")
         return
+    }
+    if !ClickClaude(btn.el, hwnd) {   ; (not where it can be clicked: opened with the keyboard instead)
+        NoteEvent("Claude's Model button isn't where it can be clicked; opening its menu with the keyboard")
+        KeyOpen(btn.el, hwnd)
     }
     ; (before: in a submenu, what Claude's window offered before it was opened, see PickFromModelMenu;
     ; top: the menu's own choices, for going back to; subs: each submenu's, once seen; seen: every
     ; choice in the last read; pickedAt, keyAt, focusMs: opening a submenu, see WatchSubmenu)
     ModelMenu := {title: "MODEL", items: [], key: "opening", hwnd: hwnd, btn: btn, tries: 0, before: "", top: [], subs: Map(), seen: Map(), trigger: "",
-        pickedAt: 0, keyAt: 0, focusMs: -1}
+        pickedAt: 0, keyAt: 0, focusMs: -1, pre: pre}
     Kick()
     SetTimer(ReadModelMenu, -350)
     SetTimer(WatchModelMenu, 400)
@@ -8438,7 +8469,7 @@ ShowMenuNow(m) {
             if m.before {
                 if !(m.before.Has(c.name) || c.name ~= "i)learn more$")
                     items.Push({name: c.name, el: c.el, kind: kind = "toggle" ? "toggle" : "pick", picked: IsPicked(c.el)})
-            } else if (kind != "")
+            } else if (kind != "" && !(m.HasOwnProp("pre") && m.pre.Has(c.name)))   ; (not what was there before it opened, see OpenModelMenu)
                 items.Push({name: c.name, el: c.el, kind: kind, picked: kind != "more" && IsPicked(c.el)})
         }
     }
