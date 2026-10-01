@@ -5,8 +5,8 @@
 ; Chat and Cowork page: toggles voice mode in the chat that's showing.
 ; Code page, or anywhere voice mode isn't available: toggles dictation, which types what you
 ; say into the message box. Dictation ends by itself once you've been quiet for 2 seconds
-; (3.5 once you've been talking a while, so a pause to think doesn't cut you off), then the
-; message is sent. Pressing the button again ends dictation right away and sends it too.
+; (3.5 once you've been talking a while, so a pause to think doesn't cut you off; but always 2 in a
+; voice chat, so what you say to your friends after isn't picked up), then the message is sent. Pressing the button again ends dictation right away and sends it too.
 ;
 ; It keeps the conversation going: once Claude has finished replying, it beeps and listens again
 ; for your next message. The conversation ends when you:
@@ -318,6 +318,8 @@ StartDictation(hwnd, dictateBtn) {
 WatchForSilence(hwnd, firstWordsMs) {
     meter := OpenMicMeter()
     start := A_TickCount, lastVoice := 0, firstVoice := 0, lastCheck := A_TickCount
+    if (chatting := VoiceChat()) != ""   ; (in a voice chat: what comes after a pause is likely for your friends)
+        Log("In a voice chat (" chatting "), so a " SILENCE_MS " ms quiet ends dictation")
     quietMax := 0.0, voiceMax := 0.0, recent := []
     loop {
         Sleep 100
@@ -338,7 +340,7 @@ WatchForSilence(hwnd, firstWordsMs) {
             break
         }
 
-        quietFor := QuietNeeded(lastVoice - firstVoice)
+        quietFor := QuietNeeded(lastVoice - firstVoice, chatting != "")
         if (lastVoice && A_TickCount - lastVoice >= quietFor) {
             Log("Quiet for " quietFor " ms after " (quietFor > SILENCE_MS ? Round((lastVoice - firstVoice) / 1000) " s of " : "") "talking")
             ended := "quiet"
@@ -367,8 +369,44 @@ WatchForSilence(hwnd, firstWordsMs) {
     return {ended: ended, talked: lastVoice != 0}
 }
 
-; How long a quiet ends dictation, after talking for talkedMs (from the first word to the last).
-QuietNeeded(talkedMs) => talkedMs >= LONG_TALK_MS ? LONG_SILENCE_MS : SILENCE_MS
+; How long a quiet ends dictation, after talking for talkedMs (from the first word to the last). In a
+; voice chat (chatting), always the short one: the longer wait for a pause to think picked up what
+; you said to your friends after it ("Best catcher in the league", sent to Claude).
+QuietNeeded(talkedMs, chatting := false) => !chatting && talkedMs >= LONG_TALK_MS ? LONG_SILENCE_MS : SILENCE_MS
+
+; Another program that's using the microphone right now (like Discord, in a voice chat), by the name
+; of its program, or "" if none is: Windows notes which programs are using it. Claude, these scripts
+; and the "Hey Claude" ear (which uses it the whole time it listens) don't count.
+VoiceChat() {
+    static base := "HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+    for where in [base "\NonPackaged", base] {
+        loop reg, where, "K" {
+            if !IsOtherMicUser(A_LoopRegName)
+                continue
+            key := RegExReplace(A_LoopRegKey, "i)^(HKEY_CURRENT_USER|HKCU)\\") "\" A_LoopRegName
+            if (MicTime(key, "LastUsedTimeStart") && MicTime(key, "LastUsedTimeStop") = 0)   ; started, and not stopped yet
+                return RegExReplace(RegExReplace(A_LoopRegName, "^.*#"), "i)\.exe$")
+        }
+    }
+    return ""
+}
+
+; Whether a program Windows notes as using the mic (by its name there, like "C:#Users#...#Discord.exe"
+; or a Store app's name) is another one, not Claude, these scripts or the "Hey Claude" ear. (The ear
+; runs on Python, and Windows notes it as the Python install itself, not by the ear's folder: any
+; Python counts as the ear. Counted as a voice chat, it made every dictation one.)
+IsOtherMicUser(regName) {
+    name := RegExReplace(regName, "^.*#")   ; (just Discord.exe)
+    return !(name = "NonPackaged" || name ~= "i)^(autohotkey.*|claude|pythonw?)(\.exe)?$|^Claude_")
+}
+
+; One of the times Windows notes when a program starts or stops using the microphone (a 64-bit
+; number, which RegRead can't read), or "" if there isn't one.
+MicTime(key, name) {
+    if DllCall("advapi32\RegGetValueW", "ptr", 0x80000001, "wstr", key, "wstr", name, "uint", 0x48, "ptr", 0, "int64*", &when := 0, "uint*", &size := 8) = 0   ; HKEY_CURRENT_USER, RRF_RT_QWORD
+        return when
+    return ""
+}
 
 ; Waits for your words to show up in the message box, then sends it with Enter.
 SendWhenTranscribed(hwnd, textBefore, timeoutMs) {

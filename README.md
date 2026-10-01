@@ -186,7 +186,9 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
 
 **Voice + send button** (`claude-voice-on-off-send.ahk`)
 - Once you've been talking a while (6 seconds), dictation waits for 3.5 seconds of quiet instead of
-  2 before it ends, so a pause to think in a longer message doesn't cut you off.
+  2 before it ends, so a pause to think in a longer message doesn't cut you off. In a voice chat
+  (while Discord or another program is using your mic) it's always 2 seconds, so what you say to
+  your friends after a pause isn't picked up.
 - After dictation ends, it waits for your words to land in the message box and presses Enter.
 - Then it waits for Claude to finish replying, beeps, and listens for your next message.
 - The conversation ends when you finish a message with a goodbye ("bye", "I'm done", "that's all",
@@ -304,7 +306,7 @@ Each script has a Settings block near the top. The most useful ones:
 | Script | Setting | What it's for |
 |---|---|---|
 | voice scripts | `SILENCE_MS` | How much quiet ends dictation (default 2 s) |
-| voice + send | `LONG_SILENCE_MS`, `LONG_TALK_MS` | The longer quiet that ends dictation once you've been talking a while (3.5 s, after 6 s of talking), so a pause to think doesn't cut you off |
+| voice + send | `LONG_SILENCE_MS`, `LONG_TALK_MS` | The longer quiet that ends dictation once you've been talking a while (3.5 s, after 6 s of talking), so a pause to think doesn't cut you off. Not in a voice chat, where it's always `SILENCE_MS` |
 | voice scripts | `FIRST_WORDS_MS`, `NEXT_WORDS_MS` | How long to wait for you to start talking (7 s) |
 | voice scripts | `VOICE_LEVEL` | Mic level that counts as talking. Raise it if background noise keeps dictation going |
 | voice + send | `SIGN_OFFS` | The goodbyes that end a conversation |

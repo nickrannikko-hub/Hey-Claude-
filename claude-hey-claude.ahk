@@ -265,31 +265,8 @@ NoteTalking(pos) {
         TalkStarts.RemoveAt(1)
 }
 
-; Another program that's using the microphone right now (like Discord, in a voice chat), by the name
-; of its program, or "" if none is: Windows notes which programs are using it. Claude and these
-; scripts themselves don't count.
-VoiceChat() {
-    static base := "HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
-    for where in [base "\NonPackaged", base] {
-        loop reg, where, "K" {
-            name := RegExReplace(A_LoopRegName, "^.*#")   ; (C:#Users#...#Discord.exe: just Discord.exe)
-            if (name = "NonPackaged" || name ~= "i)^(autohotkey.*|claude)(\.exe)?$|^Claude_")
-                continue
-            key := RegExReplace(A_LoopRegKey, "i)^(HKEY_CURRENT_USER|HKCU)\\") "\" A_LoopRegName
-            if (MicTime(key, "LastUsedTimeStart") && MicTime(key, "LastUsedTimeStop") = 0)   ; started, and not stopped yet
-                return RegExReplace(name, "i)\.exe$")
-        }
-    }
-    return ""
-}
-
-; One of the times Windows notes when a program starts or stops using the microphone (a 64-bit
-; number, which RegRead can't read), or "" if there isn't one.
-MicTime(key, name) {
-    if DllCall("advapi32\RegGetValueW", "ptr", 0x80000001, "wstr", key, "wstr", name, "uint", 0x48, "ptr", 0, "int64*", &when := 0, "uint*", &size := 8) = 0   ; HKEY_CURRENT_USER, RRF_RT_QWORD
-        return when
-    return ""
-}
+; (VoiceChat, which tells when another program like Discord is using the mic, is in
+; claude-voice-on-off-send.ahk: dictation goes by it too.)
 
 ; pos: where in the recognizer's audio the phrase ended.
 OnHeard(result, pos := 0) {

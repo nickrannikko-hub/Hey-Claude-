@@ -140,7 +140,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.7.0"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.7.1"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -260,6 +260,7 @@ SeenPage := {page: "", at: 0}   ; the page the reads of Claude's window last sai
 ; code: {x, y}, w, h}, so switching pages clicks one straight away (see ClickTab) instead of first
 ; looking for it in Claude's window, which takes most of a second in a long conversation.
 TabSpots := ""
+PressPageSwitch := ClickTabSlowly   ; what presses Claude's page switch the slow way (see SwitchedYet; a test puts a stand-in here)
 ; What Claude's buttons under its message box say on each page (see ModelBarOf), for the list beside
 ; the box (see Bar): the model, the effort (Code page) and the usage (Code page: context and plan
 ; limits); and when you last changed one from there (setAt), so a read from just before doesn't undo it.
@@ -540,6 +541,13 @@ ClearNote() {
 ; reading out loud stops). The page open under it closes too; the rest (the list beside it, the
 ; settings) goes with the script.
 GoAway(*) {
+    ; First, nothing more from Windows about windows coming in front or the page moving: as captions
+    ; close, what that looks at goes ("Browser has not been assigned a value", once).
+    WatchForeground(false)
+    for h in [Browser.hook, Browser.hook2]
+        if h
+            DllCall("UnhookWinEvent", "ptr", h)
+    Browser.hook := Browser.hook2 := 0
     MuteClaude(true)
     try StopReading()
     GuardGame(false)
@@ -610,10 +618,14 @@ HasUIAccess() {
 
 ; Notes in FOCUS_LOG whenever a game (or anything else full screen) loses the foreground, and what
 ; took it, so if a game ever drops to the desktop it's clear what did it. The box's own windows
-; never take it (they're made so they can't).
-WatchForeground() {
-    static callback := CallbackCreate(ForegroundChanged, "F", 7)
-    DllCall("SetWinEventHook", "uint", 3, "uint", 3, "ptr", 0, "ptr", callback, "uint", 0, "uint", 0, "uint", 0, "ptr")   ; EVENT_SYSTEM_FOREGROUND
+; never take it (they're made so they can't). (on false: stops watching, as captions close: a window
+; coming in front as they closed once found what it looks at already gone, see GoAway.)
+WatchForeground(on := true) {
+    static callback := CallbackCreate(ForegroundChanged, "F", 7), hook := 0
+    if (on && !hook)
+        hook := DllCall("SetWinEventHook", "uint", 3, "uint", 3, "ptr", 0, "ptr", callback, "uint", 0, "uint", 0, "uint", 0, "ptr")   ; EVENT_SYSTEM_FOREGROUND
+    else if (!on && hook)
+        DllCall("UnhookWinEvent", "ptr", hook), hook := 0
 }
 
 ForegroundChanged(hook, event, hwnd, idObject, idChild, thread, time) {
@@ -759,6 +771,11 @@ Digest(read) {
     hwnd := read.hwnd, now := read.now
     LastHwnd := hwnd
     NoteSidebar(now)   ; (whichever page it's of)
+    ; Which page Claude is on, as last read: noted even while the box waits for Claude to switch, so
+    ; a switch that didn't take is seen (see SwitchedYet). (Noted only after the wait, it never was:
+    ; the box gave up waiting and went back, and the switch was never tried again.)
+    if (read.page != "")
+        SeenPage.page := read.page, SeenPage.at := A_TickCount
     ; You just switched Claude's page from the box, which went to that page's conversation straight
     ; away (see SelectPage): until Claude's window has caught up, what it still shows is the page
     ; before, which isn't news.
@@ -807,8 +824,6 @@ Digest(read) {
     }
     ; Which page Claude is on, for the tab on top of the box. It's checked now and then: it's slow to
     ; find. (Not for a moment after you switch it from the box, see SelectPage.)
-    if (read.page != "")
-        SeenPage.page := read.page, SeenPage.at := A_TickCount
     if (read.page != "" && A_TickCount - PageAt > 1500)
         NoticePage(read.page)
     if (read.bar != "" && A_TickCount - ModelBars.setAt > 2500 && !ModelMenu) {   ; (not while you pick, or just after)
@@ -982,39 +997,60 @@ SelectPage(which) {
     try {
         hwnd := FindClaudeWindow()
         ; Straight to where its switch was last seen: instant, and Claude stays where it is. If that
-        ; didn't take (the switch had moved), it's looked for after all.
-        if ClickTab(hwnd, which) {
-            clicked := A_TickCount
-            SetTimer(() => SwitchedYet(which, clicked), -1600)
-        } else
-            ClickTabSlowly(hwnd, which)
+        ; didn't take (the switch had moved), it's looked for after all. Either way, it's checked.
+        quick := ClickTab(hwnd, which)
+        how := quick ? "" : PressPageSwitch.Call(hwnd, which)
+        clicked := A_TickCount
+        SetTimer(() => SwitchedYet(which, clicked, quick, how), -1200)
         ReadSoon()
     }
 }
 
 ; Claude's switch to a page (which), found in Claude's window first: slower, in a long conversation.
+; What it did, for the log.
 ClickTabSlowly(hwnd, which) {
     tab := FindByPrefix(hwnd, UIA_RADIO, which = "chat" ? "Chat and Cowork" : "Code")
+    if !tab
+        return "its switch wasn't found in Claude's window"
     ; In a game, Claude's switch is clicked with click messages: through UI Automation, Claude's
     ; window would jump in front of the game (see PostClick, in claude-voice-on-off-send.ahk).
-    if (tab && !(GameFront && PostClick(tab.el, hwnd)) && (pattern := GetPattern(tab.el, 10010, "{a8efa66a-0fda-421a-9194-38021f3578ea}")))
-        ComCall(3, pattern)   ; Select
+    if (GameFront && PostClick(tab.el, hwnd))
+        return "clicked where it is"
+    if !(pattern := GetPattern(tab.el, 10010, "{a8efa66a-0fda-421a-9194-38021f3578ea}"))
+        return "it couldn't be pressed"
+    ComCall(3, pattern)   ; Select
+    return "pressed"
 }
 
-; After a quick switch (see ClickTab, at clicked): once a read of Claude's window since then says
-; which page it's on (they check it every second and a half), if that isn't the one asked for, the
-; switch is looked for after all.
-SwitchedYet(which, clicked) {
+; After switching Claude's page from the box (at clicked: quick, at its switch's last spot, see
+; ClickTab; or how ClickTabSlowly went): once a read of Claude's window since says which page it's
+; on, if that isn't the one asked for, a quick switch that didn't take is done the slow way, with the
+; box staying on that page meanwhile, and checked again. Still not: the box goes by Claude's window
+; again, and it's noted why. (It used to go back to the other page after 4 s and never try again:
+; on another computer the quick switch missed, and the box went back and forth with every click.)
+SwitchedYet(which, clicked, quick, how := "") {
     Critical   ; (runs to the end: see ClickClaude)
     if (SeenPage.at < clicked + 300) {   ; (no read since: checks back shortly, for a while)
-        if (A_TickCount - clicked < 5000)
-            SetTimer(() => SwitchedYet(which, clicked), -500)
+        if (A_TickCount - clicked < 6000)
+            SetTimer(() => SwitchedYet(which, clicked, quick, how), -400)
         return
     }
-    if (SeenPage.page != which) {
-        NoteEvent("switching to " which " where its switch was didn't take; looking for it")
-        try ClickTabSlowly(FindClaudeWindow(), which)
+    if (SeenPage.page = which)
+        return
+    hwnd := FindClaudeWindow()
+    if quick {
+        s := TabSpots, spotNow := ""
+        try spotNow := (tab := FindByPrefix(hwnd, UIA_RADIO, which = "chat" ? "Chat and Cowork" : "Code")) && (at := SpotIn(hwnd, tab.el)) ? at.x "," at.y : "not found"
+        NoteEvent(Format("switching to {} where its switch was ({},{}) didn't take (it's at {} now); looking for it", which, s ? s.%which%.x : "?", s ? s.%which%.y : "?", spotNow))
+        PageAsked.page := which, PageAsked.at := A_TickCount   ; (the box stays on that page meanwhile)
+        how := ""
+        try how := PressPageSwitch.Call(hwnd, which)
+        again := A_TickCount
+        SetTimer(() => SwitchedYet(which, again, false, how), -1200)
+        return
     }
+    NoteEvent(Format("couldn't switch Claude to {} ({}; Claude's window '{}' {}): the box goes by Claude's window", which, how, WinExist(hwnd) ? WinGetTitle(hwnd) : "-", hwnd))
+    PageAsked.page := ""
 }
 
 ; The page switch button (claude-switch-page.ahk) was pressed: to the other page. Out of a game,
@@ -1267,6 +1303,10 @@ ReadEvery(ms) {
 StartFetcher() {
     if (A_LineFile != A_ScriptFullPath || FetcherKeepingUp() || Fetcher.startedAt && A_TickCount - Fetcher.startedAt < 15000)
         return
+    ; One that went quiet but is still there (like while the computer slept) goes first: it carried on
+    ; after, beside the new one, and Claude's window was read twice over.
+    if (Fetcher.pid && ProcessExist(Fetcher.pid))
+        try ProcessClose(Fetcher.pid)
     Fetcher.hwnd := 0, Fetcher.startedAt := A_TickCount
     try {
         Run('"' RegExReplace(A_AhkPath, "i)_UIA(?=\.exe$)") '" "' A_ScriptFullPath '" fetcher ' A_ScriptHwnd, A_ScriptDir, , &pid)
