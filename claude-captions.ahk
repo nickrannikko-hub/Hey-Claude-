@@ -140,7 +140,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.7.3"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.7.4"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -262,6 +262,8 @@ ClaudeConvo := ""               ; the conversation Claude's window last showed (
 ; looking for it in Claude's window, which takes most of a second in a long conversation.
 TabSpots := ""
 PressPageSwitch := ClickTabSlowly   ; what presses Claude's page switch the slow way (see SwitchedYet; a test puts a stand-in here)
+PageNow := PageOf               ; what asks Claude's window which page it's on (see SwitchedYet; a test puts a stand-in here)
+QuickMisses := 0                ; how often the quick switch at Claude's page switch's spot hasn't taken (see SwitchedYet)
 ; What Claude's buttons under its message box say on each page (see ModelBarOf), for the list beside
 ; the box (see Bar): the model, the effort (Code page) and the usage (Code page: context and plan
 ; limits); and when you last changed one from there (setAt), so a read from just before doesn't undo it.
@@ -482,6 +484,7 @@ CaptionsMain() {
     OnMessage(0x215, BoxMouseUp)     ; WM_CAPTURECHANGED: something else took the mouse mid-drag
     OnMessage(0x20, BoxCursor)       ; WM_SETCURSOR
     OnMessage(0x20A, CatcherWheel)   ; WM_MOUSEWHEEL (on the page, in a game: see CatchPage)
+    OnMessage(0x20A, BoxWheel)       ; ...and on the box itself, from a touchpad (see HasTouchpad)
     OnMessage(0x20E, CatcherWheel)   ; WM_MOUSEHWHEEL
     OnMessage(0x203, CatcherDoubleClick)   ; WM_LBUTTONDBLCLK
     OnMessage(0xFF, RawMouse)        ; WM_INPUT (the mouse's own movement, in a game: see GamePointer)
@@ -773,7 +776,10 @@ Digest(read) {
     LastHwnd := hwnd
     if (now.convo != "")
         ClaudeConvo := now.convo
-    NoteSidebar(now, read.page != "" ? read.page : A_TickCount - SeenPage.at < 3000 ? SeenPage.page : "")   ; (whichever page it's of)
+    ; (Whichever page it's of: by the conversation, or with none, the page this same read says. Not the
+    ; page seen a moment before: just after switching, that was the other page still, and its list
+    ; got this page's chats.)
+    NoteSidebar(now, read.page)
     ; Which page Claude is on, as last read: noted even while the box waits for Claude to switch, so
     ; a switch that didn't take is seen (see SwitchedYet). (Noted only after the wait, it never was:
     ; the box gave up waiting and went back, and the switch was never tried again.)
@@ -1005,10 +1011,11 @@ SelectPage(which) {
         hwnd := FindClaudeWindow()
         ; Straight to where its switch was last seen: instant, and Claude stays where it is. If that
         ; didn't take (the switch had moved), it's looked for after all. Either way, it's checked.
-        quick := ClickTab(hwnd, which)
+        ; (Where it's missed before, out of a game: the slow way straight away, see SwitchedYet.)
+        quick := !(QuickMisses && !GameFront) && ClickTab(hwnd, which)
         how := quick ? "" : PressPageSwitch.Call(hwnd, which)
         clicked := A_TickCount
-        SetTimer(() => SwitchedYet(which, clicked, quick, how), -1200)
+        SetTimer(() => SwitchedYet(which, clicked, quick, how), -700)
         ReadSoon()
     }
 }
@@ -1036,19 +1043,29 @@ ClickTabSlowly(hwnd, which) {
 ; again, and it's noted why. (It used to go back to the other page after 4 s and never try again:
 ; on another computer the quick switch missed, and the box went back and forth with every click.)
 SwitchedYet(which, clicked, quick, how := "") {
+    global QuickMisses
     Critical   ; (runs to the end: see ClickClaude)
-    if (SeenPage.at < clicked + 300) {   ; (no read since: checks back shortly, for a while)
-        if (A_TickCount - clicked < 6000)
-            SetTimer(() => SwitchedYet(which, clicked, quick, how), -400)
-        return
+    ; Which page Claude's on: asked of its window straight away (see PageNow), or if it doesn't say,
+    ; as the reads of it since say (every second and a half or so: waiting for them, a switch that
+    ; didn't take took seconds to put right).
+    hwnd := FindClaudeWindow(), on := ""
+    try on := PageNow.Call(hwnd)
+    if (on = "") {
+        if (SeenPage.at < clicked + 300) {   ; (no read since: checks back shortly, for a while)
+            if (A_TickCount - clicked < 6000)
+                SetTimer(() => SwitchedYet(which, clicked, quick, how), -400)
+            return
+        }
+        on := SeenPage.page
     }
-    if (SeenPage.page = which)
+    if (on = which)
         return
-    hwnd := FindClaudeWindow()
     if quick {
         s := TabSpots, spotNow := ""
         try spotNow := (tab := FindByPrefix(hwnd, UIA_RADIO, which = "chat" ? "Chat and Cowork" : "Code")) && (at := SpotIn(hwnd, tab.el)) ? at.x "," at.y : "not found"
-        NoteEvent(Format("switching to {} where its switch was ({},{}) didn't take (it's at {} now); looking for it", which, s ? s.%which%.x : "?", s ? s.%which%.y : "?", spotNow))
+        NoteEvent(Format("switching to {} where its switch was ({},{}) didn't take (it's at {} now); looking for it{}", which, s ? s.%which%.x : "?", s ? s.%which%.y : "?", spotNow,
+            QuickMisses ? "" : ". From now on, switched that way straight away (out of a game)"))
+        QuickMisses += 1
         PageAsked.page := which, PageAsked.at := A_TickCount   ; (the box stays on that page meanwhile)
         how := ""
         try how := PressPageSwitch.Call(hwnd, which)
@@ -3196,7 +3213,10 @@ WatchMouse(at := "") {   ; (at: a spot to take the pointer to be at, {x, y}, for
     ; Clicks go through the box except on its handles. But in a game, which hides the pointer, the
     ; whole box takes the mouse while you point at it, so the pointer shows over all of it (and it keeps
     ; it across the gap beside it, so coming back onto it, the pointer's the box's at once).
-    through := hot = "" && !(GameFront && (part != "" || over))
+    ; (And with a touchpad, too: its two-finger scrolling goes to the window under the pointer, not
+    ; through the hook the mouse wheel's shortcuts go by, so the box has to be that window to get it,
+    ; see BoxWheel. Letting it through, a laptop's touchpad scrolled what was behind the box instead.)
+    through := hot = "" && !(GameFront ? part != "" || over : part != "" && HasTouchpad())
     if (hot != Anim.hot || through != Anim.through) {
         Anim.hot := hot, Anim.through := through
         ClickThrough(through)
@@ -3752,7 +3772,7 @@ HasEarlier() => History.Length || Current.height > Settings.Lines * Look.lineH
 ; with whole lines showing. Down comes forward again, and one more notch down once you're at the
 ; newest goes back to the live captions. That last notch has to come after the wheel has stopped,
 ; so a spin down doesn't carry you past.
-Scroll(dir) {
+Scroll(dir, notches := "") {   ; (notches: how far, if not the mouse wheel's own, see BoxWheel)
     global ScrollAt
     static last := 0
     ScrollAt := A_TickCount
@@ -3770,7 +3790,8 @@ Scroll(dir) {
             ToLive()
         return
     }
-    notches := A_EventInfo ? Min(A_EventInfo, 3) : 0.5   ; 0: a touchpad's less-than-a-notch
+    if (notches = "")
+        notches := A_EventInfo ? Min(A_EventInfo, 3) : 0.5   ; 0: a touchpad's less-than-a-notch
     View.topLine := Max(1, Min(newest, View.topLine - dir * Max(1, Round(2 * notches))))
     View.scrolled := true
     if (dir > 0 && View.topLine <= 3)   ; at the oldest thing the box has: more from Claude's window
@@ -3781,7 +3802,53 @@ Scroll(dir) {
     UpdateVisibility()
 }
 
-; Scrolling back as far as a conversation you cleared from the box (see ClearChat) goes: the box says
+; Scrolling the box with a touchpad (see HasTouchpad): its two-finger scrolling comes to the box itself,
+; as wheel messages a little at a time, while it has the mouse (see WatchMouse). Counted up, a line
+; for every half notch's worth, the way the wheel scrolls; up only when there's something to go back
+; to, down only while scrolled back, as with the wheel (see the wheel's shortcuts above).
+BoxWheel(wParam, lParam, msg, hwnd) {
+    static sum := 0, lastAt := 0
+    if !(BoxGui && hwnd = BoxGui.Hwnd)
+        return
+    if (A_TickCount - lastAt > 400)   ; (a new swipe)
+        sum := 0
+    lastAt := A_TickCount
+    sum += (wParam >> 16 & 0xFFFF) - (wParam >> 16 & 0x8000 ? 0x10000 : 0)
+    while (Abs(sum) >= 60) {
+        dir := sum > 0 ? 1 : -1, sum -= dir * 60
+        if (dir > 0 && !HasEarlier())
+            return (Cleared.Has(ConvKey) && ClearedTop(), sum := 0, 0)
+        if (dir < 0 && !View.scrolled)
+            return (sum := 0, 0)
+        Scroll(dir, 0.5)
+    }
+    return 0
+}
+
+; Whether this PC has a touchpad (a laptop's precision touchpad), found among its input devices (a
+; HID one used as a touchpad: digitizer page 0x0D, usage 0x05). Looked for once.
+HasTouchpad() {
+    static has := ""
+    if (has != "")
+        return has
+    has := false, size := 8 + A_PtrSize, count := 0   ; (RAWINPUTDEVICELIST: the device, its kind)
+    if (DllCall("GetRawInputDeviceList", "ptr", 0, "uint*", &count, "uint", size) != 0 || !count)
+        return has
+    list := Buffer(count * size, 0)
+    count := DllCall("GetRawInputDeviceList", "ptr", list, "uint*", &count, "uint", size, "int")
+    loop Max(count, 0) {
+        at := (A_Index - 1) * size
+        if (NumGet(list, at + A_PtrSize, "uint") != 2)   ; RIM_TYPEHID
+            continue
+        info := Buffer(32, 0), NumPut("uint", 32, info), got := 32
+        if (DllCall("GetRawInputDeviceInfoW", "ptr", NumGet(list, at, "ptr"), "uint", 0x2000000B, "ptr", info, "uint*", &got, "int") > 0   ; RIDI_DEVICEINFO
+            && NumGet(info, 20, "ushort") = 0x0D && NumGet(info, 22, "ushort") = 0x05)   ; usUsagePage, usUsage
+            return has := true
+    }
+    return has
+}
+
+; Scrolling back as far as a conversation you cleared from the box (see ClearChat): the box says
 ; so, rather than the wheel seeming not to work (a moment apart at most).
 ClearedTop() {
     static at := 0

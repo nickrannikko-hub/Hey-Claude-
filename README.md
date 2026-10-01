@@ -98,8 +98,11 @@ unzip it, and follow [Setup](#setup).
 ## Setup
 
 1. **Install AutoHotkey v2.**
-2. **Put this folder somewhere permanent**, like `Documents\claude-stream-deck-voice`. Logs and
-   settings are saved next to the scripts.
+2. **Unzip it first** (right-click the zip → **Extract All…**), then **put the folder somewhere
+   permanent**, like `Documents\claude-stream-deck-voice`. The scripts can't run from inside the zip:
+   they need each other, and Windows only takes out the one you double-click (an "#Include file …
+   cannot be opened" error means that's what happened). Logs and settings are saved next to the
+   scripts. Updating? Copy the new files over the old ones: your settings and logs aren't in the zip.
 3. **Run the setup check:** open Claude, then double-click `claude-setup-check.ahk`. It checks
    AutoHotkey, the Claude app, that Claude is in English, "Hold to record", Windows' speech
    recognizer and your microphone, and tells you exactly what (if anything) to fix. It doesn't
@@ -241,7 +244,7 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
   Shift+Enter starts a new line, and Esc puts it away (keeping what you typed).
 - **Read replies out loud (Code page):** an option in the settings reads Claude's replies in a
   Windows voice, with the words showing as they're read.
-- Scroll the mouse wheel over the box to read back through the conversation. While you do, the
+- Scroll the mouse wheel (or a laptop's touchpad) over the box to read back through the conversation. While you do, the
   name of who's talking stays pinned at the top and each message's time fades in. Scroll to the
   top and the box fetches older messages from Claude's window. A small arrow at the top means
   there's something above you haven't seen yet, and each paragraph you haven't read says **NEW**
