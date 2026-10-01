@@ -140,7 +140,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.7.1"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.7.2"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -1083,7 +1083,7 @@ SwitchPageNow() {
 ; Automation, but not with a game in front, which Claude would come in front of). Whether it could.
 OpenSession(title) {
     try {
-        hwnd := FindClaudeWindow()
+        hwnd := ClaudeToClick()   ; (minimized, it's shown again behind your windows first: see ClaudeToClick)
         for button in GetElements(hwnd, UIA_BUTTON) {
             name := button.name
             if !(name == title || SubStr(name, -StrLen(title) - 1) == " " title) || StartsWith(name, "More options for ")
@@ -8196,11 +8196,36 @@ ClaudeButton(hwnd, prefix) {
     return ""
 }
 
-; Claude's window, ready to click in from behind: restored if it's minimized, but not brought forward.
+; Claude's window, ready to click in from behind: restored if it's minimized, but not brought forward,
+; and kept behind your other windows. Restored, it's given a moment to lay itself out again first: a
+; click straight away went nowhere (on a laptop, where Claude's window is often minimized, the model
+; menu never opened until you opened it in Claude yourself).
 ClaudeToClick() {
-    if (hwnd := FindClaudeWindow()) && DllCall("IsIconic", "ptr", hwnd)
+    if !(hwnd := FindClaudeWindow())
+        return 0
+    if DllCall("IsIconic", "ptr", hwnd) {
         DllCall("ShowWindow", "ptr", hwnd, "int", 4)   ; SW_SHOWNOACTIVATE
+        DllCall("SetWindowPos", "ptr", hwnd, "ptr", 1, "int", 0, "int", 0, "int", 0, "int", 0, "uint", 0x13)   ; HWND_BOTTOM: behind your windows; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+        NoteEvent("Claude's window was minimized: shown again behind your other windows, so the box can click in it")
+        Sleep 300
+    }
     return hwnd
+}
+
+; One of Claude's buttons that opens a menu (el), opened as a keyboard would: put in focus through UI
+; Automation, then the Down arrow once it has the focus (a fifth of a second at most). It doesn't
+; depend on where the button is on screen, for when a click didn't take. (Down, never Enter: if the
+; focus were still in the message box, Enter would send what's in it.)
+KeyOpen(el, hwnd) {
+    PressInClaude(el, e => ComCall(3, e))   ; SetFocus
+    since := A_TickCount, focused := false
+    while (!focused && A_TickCount - since < 200) {
+        try focused := HasFocus(el)
+        if !focused
+            Sleep 20
+    }
+    PostKey(hwnd, 0x28, 0x50)   ; Down
+    return focused
 }
 
 ; The model's ⌄: opens Claude's own Model menu (from behind, whatever's in front), and the list shows
@@ -8373,17 +8398,29 @@ PostKey(hwnd, vk, scan, extended := true) {
     DllCall("PostMessage", "ptr", hwnd, "uint", 0x101, "ptr", vk, "ptr", bits | 1 << 30 | 1 << 31)    ; WM_KEYUP
 }
 
-; Claude's model menu, shown in the list once it has opened (see OpenModelMenu, ShowMenuNow); if it
-; hasn't in a couple of seconds, the list closes.
+; Claude's model menu, shown in the list once it has opened (see OpenModelMenu, ShowMenuNow). If the
+; click on its button didn't open it, it's opened with the keyboard (see KeyOpen), then clicked once
+; more; if it still hasn't in a couple of seconds, the list closes, and it's noted why. (It used to
+; just wait, and on a laptop it waited for you to open the menu in Claude yourself.)
 ReadModelMenu() {
     Critical   ; (runs to the end: see ClickClaude)
     global ModelMenu
     m := ModelMenu
     if (!m || ShowMenuNow(m))
         return
-    if (++m.tries < 7)
+    ++m.tries
+    if (m.tries = 3) {
+        focused := KeyOpen(m.btn.el, m.hwnd)
+        NoteEvent("Claude's model menu didn't open with a click; opening it with the keyboard" (focused ? "" : " (its button didn't take the focus)"))
+    } else if (m.tries = 6) {
+        NoteEvent("Claude's model menu still didn't open; clicking its button again")
+        ClickClaude(m.btn.el, m.hwnd)
+    }
+    if (m.tries < 9)
         return SetTimer(ReadModelMenu, -250)
-    NoteEvent("Claude's model menu didn't open")
+    why := !DllCall("IsWindow", "ptr", m.hwnd) ? "Claude's window is gone" : DllCall("IsIconic", "ptr", m.hwnd) ? "Claude's window is minimized"
+        : SpotIn(m.hwnd, m.btn.el) ? "its button is showing" : "its button isn't showing"
+    NoteEvent("Claude's model menu didn't open (" why ")")
     ModelMenu := ""
     Kick()
 }
