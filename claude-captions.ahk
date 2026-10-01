@@ -140,7 +140,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.7.4"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.7.5"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -459,6 +459,7 @@ CaptionsMain() {
     DllCall("ChangeWindowMessageFilter", "uint", SwitchPageMessage(), "uint", 1)   ; (the page switch button, see SwitchPagePressed)
     Persistent
     OnError(BoxFailed)   ; (never an error box over your game: see BoxFailed)
+    A_MaxHotkeysPerInterval := 5000   ; (a fast wheel or a touchpad fires the wheel's shortcuts many times a second: no "hotkeys received" box)
     ; Each monitor's own scaling (like 150% on a 4K screen), so the box is sharp on any of them rather
     ; than stretched by Windows (see MonitorDpi).
     try DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")   ; DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
@@ -3604,14 +3605,20 @@ WheelRight::ScrollPage(0x20E, 120)
 
 ; The mouse wheel scrolls the box only while the pointer is over it; anywhere else it works as
 ; usual. Wheel down only belongs to the box while it's scrolled back. In a game, only once the box
-; has taken the mouse (see WatchMouse): the game's hidden pointer parked on it doesn't count.
-#HotIf OverBox() && HasEarlier()
+; has taken the mouse (see WatchMouse): the game's hidden pointer parked on it doesn't count. (Out of
+; a game, while the box has the mouse, as with a touchpad, the wheel comes to the box itself, see
+; BoxWheel: a touchpad's scrolling is a stream of little wheel turns, and as shortcuts, each one
+; scrolled a line, 70 in a second, until AutoHotkey asked whether to go on.)
+#HotIf WheelOverBox() && HasEarlier()
 WheelUp::Scroll(1)
-#HotIf OverBox() && !HasEarlier() && Cleared.Has(ConvKey)   ; (cleared, and nothing since to scroll back to)
+#HotIf WheelOverBox() && !HasEarlier() && Cleared.Has(ConvKey)   ; (cleared, and nothing since to scroll back to)
 WheelUp::ClearedTop()
-#HotIf OverBox() && View.scrolled
+#HotIf WheelOverBox() && View.scrolled
 WheelDown::Scroll(-1)
 #HotIf
+
+; The wheel over the box, for its shortcuts: while the box lets the mouse through (or in a game).
+WheelOverBox() => (Anim.through || GameFront || Handed) && OverBox()
 
 OverBox() {
     if (!Anim.shown || GameFront && !Anim.hoverTarget)
