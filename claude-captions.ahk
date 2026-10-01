@@ -140,7 +140,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.7.5"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.7.6"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -257,6 +257,7 @@ BoxGui := ""
 Page := ""                      ; which of Claude's pages it's on: "chat" (Chat and Cowork) or "code" ("" until known)
 SeenPage := {page: "", at: 0}   ; the page the reads of Claude's window last said it's on, and when
 ClaudeConvo := ""               ; the conversation Claude's window last showed (with a title), whatever the box shows (see OpenedYet)
+ListPick := {title: "", at: 0}  ; the chat or session you last picked in the list beside the box, and when (see SetReopen)
 ; Where Claude's page switches were last seen (from the reads, see PageOf): {hwnd, chat: {x, y},
 ; code: {x, y}, w, h}, so switching pages clicks one straight away (see ClickTab) instead of first
 ; looking for it in Claude's window, which takes most of a second in a long conversation.
@@ -960,7 +961,9 @@ PageOf(hwnd, &tabs := "") {
         client := Buffer(16, 0), DllCall("GetClientRect", "ptr", hwnd, "ptr", client)
         tabs := Format("{},{},{},{},{},{}", a.x, a.y, b.x, b.y, NumGet(client, 8, "int"), NumGet(client, 12, "int"))
     }
-    return IsSelected(chat.el) ? "chat" : "code"
+    ; (Code only if its own switch says so: going by Chat and Cowork's alone, anything else, like a
+    ; moment when neither says, was taken for Code, and a page's list could get the other page's chats.)
+    return IsSelected(chat.el) ? "chat" : code && IsSelected(code.el) ? "code" : ""
 }
 
 ; Clicks Claude's switch to a page (which) where it was last seen, with click messages (no mouse, and
@@ -1145,6 +1148,10 @@ OpenedYet(title, el) {
 ; had open there last, which isn't always the one you had open last (as the box saw it). So the box
 ; is ready to open yours again (see StillReopening).
 SetReopen(which) {
+    ; (Not just after you picked a chat or session in the list: that's the one you want, and opening
+    ; the one before over it made the box and Claude go back and forth between them, and the pages.)
+    if (A_TickCount - ListPick.at < 10000)
+        return (Reopen.key := "", Reopen.at := A_TickCount, Reopen.asked := false)
     Reopen.key := PageConvs.Has(which) && SubStr(PageConvs[which], -1) != "|" ? PageConvs[which] : ""
     Reopen.at := A_TickCount, Reopen.asked := false
 }
@@ -8793,6 +8800,9 @@ PanelClick() {
     title := Sessions.list[row].title
     Sessions.current := title   ; highlighted right away (the list stays open, till its tab's clicked again)
     Kick()
+    ; What you picked is what's opened: nothing the box had open before is opened again over it (see
+    ; SetReopen), even if Claude goes to the other page for it.
+    ListPick.title := title, ListPick.at := A_TickCount, Reopen.key := ""
     SetTimer(() => OpenSession(title), -1)
     return 0
 }
