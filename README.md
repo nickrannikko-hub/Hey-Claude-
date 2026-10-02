@@ -262,8 +262,9 @@ shortcut, edit the `SHORTCUTS` list at the top of the file.
   "Hey Claude", or the mic turning on, brings the box back out.
 - **Code while you're on Chat & Cowork:** the Code tab shows a dot while a Code session is working,
   and a count of its new replies.
-- **Links:** when Claude's reply links to a website, small pills show at the bottom of the box
-  (like "youtube.com"); scrolled back, they're the links in the replies you're looking at. Click
+- **Links:** when Claude's reply links to a website, or just writes out a web address (like
+  https://… or www.…), small pills show at the bottom of the box (like "youtube.com"); scrolled
+  back, they're the links in the replies you're looking at. Click
   one to open the page in a window attached right under the box, as wide as the box and lined up
   with it. Its pill says "youtube.com…" while it opens and gets a **✕** once it's there: click it
   again to close the page. Clicking another link swaps the page for that one. Pages open in

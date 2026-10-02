@@ -30,8 +30,19 @@ if !(captions := CaptionsWindow()) {
     if !captions
         ExitApp
     Sleep 2500   ; (while they get going)
+    ; Looked up again now: the copy found above can be the first one, which starts the captions again
+    ; with UI Access (so the box shows over games, see claude-captions.ahk) and closes straight away,
+    ; so by now its window is gone and the one to tell is the new copy's (given a moment more, if
+    ; it's slow to start).
+    deadline := A_TickCount + 5000
+    while (!(captions := CaptionsWindow()) && A_TickCount < deadline)
+        Sleep 250
+    if !captions
+        ExitApp
 }
-PostMessage(DllCall("RegisterWindowMessage", "str", "ClaudeCaptions.ClaudeKey", "uint"), 0, 0, , captions)
+; (try: if the captions closed in the moment since they were found, there's nobody to tell, and
+; without it that would put up an AutoHotkey error box)
+try PostMessage(DllCall("RegisterWindowMessage", "str", "ClaudeCaptions.ClaudeKey", "uint"), 0, 0, , captions)
 
 ; The running captions' own window (the copy that stays on, not its helper).
 CaptionsWindow() {

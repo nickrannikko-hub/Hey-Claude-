@@ -8,7 +8,8 @@ offline on this PC:
      pause before and after it counts, the way you say "Hey Claude" and wait for the beep. So
      "So Claude, what do you think" or "I said hey Claude and it..." never gets further.
   2. Whisper writes down what that short bit said, and it has to be just "Hey Claude".
-openWakeWord's "hey claude" model scores each bit too, for the log.
+openWakeWord's "hey claude" model scores each bit too, for the log, and when it's sure but Whisper
+wrote down something else, Whisper listens again, told to expect "Hey Claude" (see HINT_AT).
 
   --shadow        only note what it would have done, in ear-log.txt, without waking anything
   --parent <pid>  exit when that program does (claude-hey-claude.ahk passes its own)
@@ -19,11 +20,9 @@ hears someone talking, it tells the program that started it (--parent) with "Cla
 a few times a second, so voice mode knows you're still talking even in a noisy room (a game, a fan),
 where the mic's loudness alone can't tell.
 """
-import argparse, concurrent.futures, ctypes, os, queue, re, sys, threading, time, wave
+import argparse, concurrent.futures, ctypes, os, queue, re, sys, threading, time, traceback, wave
 from collections import deque
 from datetime import datetime
-
-import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(HERE, "ear-log.txt")
@@ -41,6 +40,7 @@ WHISPER = "tiny.en"        # the Whisper model: tiny.en (fastest) or base.en
 HEY = {"hey", "hay", "hi", "hei"}
 CLAUDE = {"claude", "claud", "clyde", "clod", "clawed", "klaud"}   # how Whisper writes it down in your voice
 CLOUD = {"cloud"}          # ...and ones that also need the "hey claude" model to agree (it gives "hey cloud" 0)
+HINT_AT = 0.5              # how sure the model must be for Whisper to listen again, told to expect "Hey Claude"
 KEEP_CLIPS = 40
 # -------------------------------------------------------------------------------
 
@@ -67,6 +67,23 @@ def log(msg):
                 f.write("\n".join(log_lines) + "\n")
     except OSError:
         pass
+
+
+def gave_up(why):
+    """Notes in ear-log.txt why the ear couldn't keep going, with the whole error, and exits. Run as
+    pythonw (as claude-hey-claude.ahk runs it) there's no window to print an error to, so without
+    this a broken install (after a Python, numpy or onnxruntime update, say) just died with nothing
+    said anywhere, and "Hey Claude" stopped working with no clue why."""
+    log(why + "; stopping:\n" + traceback.format_exc().rstrip())
+    sys.exit(1)
+
+
+# (Loaded here, after log and gave_up, rather than with the others at the top: if it's broken, that's
+# the first thing to fail, and it can still be noted in the log.)
+try:
+    import numpy as np
+except Exception:
+    gave_up("Couldn't load numpy")
 
 
 def is_wake(text, peak):
@@ -146,15 +163,18 @@ def main():
     if args.parent:
         threading.Thread(target=watch_parent, args=(args.parent,), daemon=True).start()
 
-    import sounddevice as sd
-    from faster_whisper import WhisperModel
-    from openwakeword.model import Model
-    from openwakeword.vad import VAD
+    try:
+        import sounddevice as sd
+        from faster_whisper import WhisperModel
+        from openwakeword.model import Model
+        from openwakeword.vad import VAD
 
-    t0 = time.perf_counter()
-    oww = Model(wakeword_models=[os.path.join(MODELS, "hey_claude.onnx")], inference_framework="onnx")
-    vad = VAD()
-    whisper = WhisperModel(WHISPER, device="cpu", compute_type="int8", cpu_threads=4, download_root=MODELS)
+        t0 = time.perf_counter()
+        oww = Model(wakeword_models=[os.path.join(MODELS, "hey_claude.onnx")], inference_framework="onnx")
+        vad = VAD()
+        whisper = WhisperModel(WHISPER, device="cpu", compute_type="int8", cpu_threads=4, download_root=MODELS)
+    except Exception:
+        gave_up("Couldn't load the voice detector, the \"hey claude\" model or Whisper")
     wake_msg = ctypes.windll.user32.RegisterWindowMessageW("ClaudeHeyClaude.Ear")
     talk_msg = ctypes.windll.user32.RegisterWindowMessageW("ClaudeHeyClaude.Talking")
     listener = {"hwnd": 0, "sent": 0.0}
@@ -174,10 +194,10 @@ def main():
                     listener["told"] = True
                     log("Telling claude-hey-claude.ahk when someone's talking")
 
-    def transcribe(audio):
+    def transcribe(audio, hint=None):
         start = time.perf_counter()
         segs, _ = whisper.transcribe(audio.astype(np.float32) / 32768, language="en", beam_size=1,
-                                     without_timestamps=True, condition_on_previous_text=False)
+                                     without_timestamps=True, condition_on_previous_text=False, initial_prompt=hint)
         return " ".join(s.text.strip() for s in segs).strip(), (time.perf_counter() - start) * 1000
 
     chunks = queue.Queue()
@@ -249,7 +269,19 @@ def main():
                 audio = np.concatenate(done["audio"])
                 guess = done["guess"] or pool.submit(transcribe, audio)
                 text, took = guess.result()
-                what = f"'{text}' ({ms / 1000:.2f} s, model {done['peak']:.2f}, loudness {loudness(audio):.3f}, Whisper {took:.0f} ms)"
+                wrote = f"'{text}'"
+                # The model's sure it was "Hey Claude", and Whisper wrote down something else: most
+                # often it missed the start of "Hey" ("Take a look", "a quad"), and you had to say it
+                # again. Whisper listens once more, told to expect "Hey Claude": with the start cut off
+                # your own "Hey Claude"s it writes that every time, and "Take a look", "Okay, cool" or
+                # "Hey, Kyle" said as such it still writes as they were.
+                if not is_wake(text, done["peak"]) and done["peak"] >= HINT_AT:
+                    again, more = transcribe(audio, "Hey Claude.")
+                    took += more
+                    wrote += f", told to expect it '{again}'"
+                    if is_wake(again, done["peak"]):
+                        text = again
+                what = f"{wrote} ({ms / 1000:.2f} s, model {done['peak']:.2f}, loudness {loudness(audio):.3f}, Whisper {took:.0f} ms)"
                 if not is_wake(text, done["peak"]):
                     if args.file or done["peak"] >= 0.5 or re.search(r"cl(au|y|aw|ou|o)d", text.lower()):
                         log("Not it: " + what)
@@ -276,4 +308,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:   # (anything else that stops it: noted in the log too, see gave_up)
+        gave_up("Something went wrong")

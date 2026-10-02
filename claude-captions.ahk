@@ -140,7 +140,7 @@
 ; (press Win+R and type shell:startup).
 
 #Requires AutoHotkey v2.0 64-bit
-CAPTIONS_VERSION := "1.7.7"   ; shown in the tray icon's tooltip and the settings window's title
+CAPTIONS_VERSION := "1.8.0"   ; shown in the tray icon's tooltip and the settings window's title
 ; Uses the voice button's code for finding and reading Claude's window.
 #Include %A_LineFile%\..\claude-voice-on-off-send.ahk
 #SingleInstance Off   ; after the #Include, so it wins over the voice button's setting; CaptionsMain handles a second copy
@@ -212,7 +212,8 @@ CLEARED_FILE   := A_ScriptDir "\claude-captions-cleared.txt" ; where you cleared
 GAMES_FILE     := A_ScriptDir "\claude-captions-games.txt"   ; games seen holding their hidden pointer still while you play (see GamePointer)
 POINTER_WATCH_TICKS := 72000    ; how long a game is watched to see if it holds its pointer, in looks at it (25 ms each) while the mouse moves: half an hour (see GamePointer)
 FOCUS_LOG      := A_ScriptDir "\claude-captions-log.txt"     ; when a game (or anything full screen) lost the foreground, and to what (see WatchForeground), how smoothly the box moves (see NoteSmoothness), and what it did about new messages (see NoteEvent)
-CODE_SESSIONS  := EnvGet("USERPROFILE") "\.claude\projects"   ; where Code sessions' transcripts are kept (see WatchCodeSessions)
+CODE_SESSIONS  := EnvGet("USERPROFILE") "\.claude\projects"   ; where Code sessions' transcripts are kept (see WatchCodeSessions, ReadTranscripts)
+TRANSCRIPT_TAIL := 4 << 20      ; how much of the end of each of them is read for when older messages were sent, as captions start (bytes, see ReadTranscripts)
 ; -----------------------------------------------------------------------------
 
 THEMES := ["Dark", "Light", "Match Windows", "Midnight", "Ocean", "Forest", "Sunset", "Paper", "Rosé", "Mono", "Custom"]
@@ -258,13 +259,18 @@ Page := ""                      ; which of Claude's pages it's on: "chat" (Chat 
 SeenPage := {page: "", at: 0}   ; the page the reads of Claude's window last said it's on, and when
 ClaudeConvo := ""               ; the conversation Claude's window last showed (with a title), whatever the box shows (see OpenedYet)
 ListPick := {title: "", at: 0}  ; the chat or session you last picked in the list beside the box, and when (see SetReopen)
+Unhid := {hwnd: 0, at: 0, since: 0, front: 0}   ; Claude's window, if the box restored it unseen from minimized to click in: when it last did, when it restored it, and what was in front then (see ReadyToClick)
+UNHID_MS := 3000                ; how long after that it's minimized again (see HideClaudeAgain)
+UNHID_MAX_MS := 30000           ; ...and the longest after that, whatever else it's kept restored for (see HideClaudeAgain)
 ; Where Claude's page switches were last seen (from the reads, see PageOf): {hwnd, chat: {x, y},
-; code: {x, y}, w, h}, so switching pages clicks one straight away (see ClickTab) instead of first
-; looking for it in Claude's window, which takes most of a second in a long conversation.
+; code: {x, y}, w, h, key}, so switching pages clicks one straight away (see ClickTab) instead of first
+; looking for it in Claude's window, which takes most of a second in a long conversation. (key: all
+; of that as one, to tell whether they've moved, see Digest.)
 TabSpots := ""
 PressPageSwitch := ClickTabSlowly   ; what presses Claude's page switch the slow way (see SwitchedYet; a test puts a stand-in here)
 PageNow := PageOf               ; what asks Claude's window which page it's on (see SwitchedYet; a test puts a stand-in here)
 QuickMisses := 0                ; how often the quick switch at Claude's page switch's spot hasn't taken (see SwitchedYet)
+TabSpotsClicked := ""           ; where Claude's page switches were (TabSpots' key) when the last quick switch clicked one (see ClickTab)
 ; What Claude's buttons under its message box say on each page (see ModelBarOf), for the list beside
 ; the box (see Bar): the model, the effort (Code page) and the usage (Code page: context and plan
 ; limits); and when you last changed one from there (setAt), so a read from just before doesn't undo it.
@@ -301,8 +307,13 @@ Browser := NoPage()
 PageExe := "msedge.exe"         ; the program of the browser the last page opened in (see OpenPage)
 PageWidths := Map()             ; how narrow each browser's window goes, by its program, once seen (see MoveBrowser)
 Perf := NewPerf()               ; how long the box spent on what isn't drawing lately (see NoteSmoothness)
-Opened := false                 ; you opened the box from its Claude tab, so it shows even with nothing to show
+; Lines for the logs (FOCUS_LOG, TIMES_FILE) noted while a read of Claude's window is being taken in
+; (HoldingLogs, see TakeRead): held back meanwhile, each as [file, line], and written just after it
+; (see AddToLog).
+HeldLogs := [], HoldingLogs := false
+Opened := false                ; you opened the box from its Claude tab, so it shows even with nothing to show
 LoadingEarlier := false         ; Claude's window is scrolled up for a moment, to read older messages (see LoadOlder)
+OlderJob := ""                  ; ...and what LoadOlder's doing meanwhile, with where Claude's list was
 Composing := false              ; you're typing to Claude in the box at the bottom (see StartTyping)
 EditGui := "", EditBox := ""    ; the real text box laid over it while you type
 Typed := "", TypedFrom := 0     ; what you've typed but not sent yet, and the window you were in before
@@ -402,8 +413,9 @@ GamePtr := {game: "", sink: false, raw: 0, x: "", y: "", mode: "", modeAt: 0, ru
 Handed := false, Veil := "", VeilCanvas := "", Took := {x: 0, y: 0, game: 0}, GlowGui := "", GlowCanvas := ""
 ; The fetcher: a helper that reads Claude's window in a program of its own, so the box never waits for
 ; it (see StartFetcher): its script window and program, when it last sent a read, when it was started,
-; what it sent that hasn't been gone through yet (a read, and your words), and how often it reads.
-Fetcher := {hwnd: 0, pid: 0, at: 0, startedAt: 0, read: "", said: "", every: CHECK_EVERY_MS}
+; what it sent that hasn't been gone through yet (a read, and your words), how often it reads, and
+; when it was last asked for a read because it had gone quiet.
+Fetcher := {hwnd: 0, pid: 0, at: 0, startedAt: 0, read: "", said: "", every: CHECK_EVERY_MS, askedAt: 0}
 ; ...and in the fetcher itself: the captions' script window, how often it reads, Claude's window and
 ; when it last checked Claude's page (see ReadClaude), and whether (and what) you're saying.
 FetchState := {owner: 0, every: CHECK_EVERY_MS, lastHwnd: 0, pageAt: 0, listening: false, said: ""}
@@ -414,8 +426,9 @@ if (A_LineFile = A_ScriptFullPath)
 ; Something going wrong in the box never shows as an error box: once, 30 of them piled up over a game,
 ; from something that went wrong each time it ran, the game and all behind them. It's noted in
 ; FOCUS_LOG instead (the same thing once a minute at most), with where it went wrong, and what was
-; running stops there, as it would have after the error box.
-BoxFailed(e, mode) {
+; running stops there, as it would have after the error box. whose says where, if it wasn't the box
+; itself (like "in the fetcher", see FetchFailed).
+BoxFailed(e, mode, whose := "") {
     static noted := Map()
     where := ""
     try where := " at line " e.Line " (" e.What ")"
@@ -424,9 +437,26 @@ BoxFailed(e, mode) {
         noted[key] := A_TickCount
         extra := ""
         try extra := e.Extra != "" ? " [" e.Extra "]" : ""
-        try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") "  ERROR: " e.Message extra where "`n", FOCUS_LOG, "UTF-8")
+        try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") "  ERROR" (whose != "" ? " " whose : "") ": " e.Message extra where "`n", FOCUS_LOG, "UTF-8")
     }
     return 1
+}
+
+; Keeps FOCUS_LOG from growing without end, as it's only ever added to (about 900 lines a day): past
+; 500 KB as captions start, it's written again with just its newest 200 KB or so, from the start of a
+; line.
+TrimFocusLog() {
+    try {
+        if (FileGetSize(FOCUS_LOG) <= 500 << 10)
+            return
+        f := FileOpen(FOCUS_LOG, "r", "UTF-8")
+        f.Pos := f.Length - (200 << 10)
+        f.ReadLine()   ; (the rest of the line it landed in the middle of)
+        text := f.Read()
+        f.Close()
+        FileDelete(FOCUS_LOG)
+        FileAppend(text, FOCUS_LOG, "UTF-8")
+    }
 }
 
 CaptionsMain() {
@@ -460,6 +490,11 @@ CaptionsMain() {
     DllCall("ChangeWindowMessageFilter", "uint", SwitchPageMessage(), "uint", 1)   ; (the page switch button, see SwitchPagePressed)
     Persistent
     OnError(BoxFailed)   ; (never an error box over your game: see BoxFailed)
+    TrimFocusLog()
+    ; Claude's window left see-through (the box closed while it had it restored unseen, see
+    ; ReadyToClick, and didn't get to minimize it again): seen again.
+    try if ((hwnd := FindClaudeWindow()) && WinGetTransparent(hwnd) = 0)
+        WinSetTransparent("Off", hwnd)
     A_MaxHotkeysPerInterval := 5000   ; (a fast wheel or a touchpad fires the wheel's shortcuts many times a second: no "hotkeys received" box)
     ; Each monitor's own scaling (like 150% on a 4K screen), so the box is sharp on any of them rather
     ; than stretched by Windows (see MonitorDpi).
@@ -547,13 +582,22 @@ ClearNote() {
 ; reading out loud stops). The page open under it closes too; the rest (the list beside it, the
 ; settings) goes with the script.
 GoAway(*) {
+    WriteHeldLogs()   ; (any lines for the logs still held back from the last read, see AddToLog)
     ; First, nothing more from Windows about windows coming in front or the page moving: as captions
     ; close, what that looks at goes ("Browser has not been assigned a value", once).
     WatchForeground(false)
-    for h in [Browser.hook, Browser.hook2]
-        if h
-            DllCall("UnhookWinEvent", "ptr", h)
-    Browser.hook := Browser.hook2 := 0
+    UnhookPage()
+    if (claudeWin := Unhid.hwnd) {   ; (Claude's window, restored unseen to click in: minimized again, and seen)
+        if (DllCall("IsWindow", "ptr", claudeWin) && DllCall("GetForegroundWindow", "ptr") != claudeWin)
+            DllCall("ShowWindow", "ptr", claudeWin, "int", 7)   ; SW_SHOWMINNOACTIVE
+        try WinSetTransparent("Off", claudeWin)
+        Unhid.hwnd := 0
+    }
+    ; (Claude's list of messages scrolled up to read older ones, see LoadOlder: put back where it was,
+    ; as its next step would have. Left scrolled up, Claude's window would be read as scrolled away
+    ; from the newest, and the box kept as it was until you scrolled it back down yourself.)
+    if (LoadingEarlier && OlderJob)
+        try ComCall(4, OlderJob.scroller, "double", -1, "double", Max(0, Min(100, OlderJob.was)))   ; SetScrollPercent
     MuteClaude(true)
     try StopReading()
     GuardGame(false)
@@ -686,13 +730,23 @@ IsPageWindow(hwnd) {
     return false
 }
 
-; The window of another copy of this script that's already running, if there is one.
+; The window of another copy of this script that's already running, if there is one. Seeing hidden
+; windows is only switched on for the look, and back as it was after: this runs as captions start,
+; and a setting changed then stays the setting for everything after, so otherwise every look for
+; Claude's window could find a hidden one of its (say, closed to the tray) instead of the real one.
 OtherCaptions() {
+    was := A_DetectHiddenWindows
     DetectHiddenWindows true
-    for hwnd in WinGetList(A_ScriptFullPath " ahk_class AutoHotkey")
-        if (hwnd != A_ScriptHwnd)
-            return hwnd
-    return 0
+    found := 0
+    try {
+        for hwnd in WinGetList(A_ScriptFullPath " ahk_class AutoHotkey")
+            if (hwnd != A_ScriptHwnd) {
+                found := hwnd
+                break
+            }
+    }
+    DetectHiddenWindows was
+    return found
 }
 
 ; ---- Keeping up with the conversation ----------------------------------------------
@@ -700,7 +754,7 @@ OtherCaptions() {
 ; Every CHECK_EVERY_MS: read Claude's window, and update the box if anything changed.
 UpdateCaptions() {
     global Reads
-    static here := {lastHwnd: 0, pageAt: 0}
+    static here := {lastHwnd: 0, pageAt: 0, readAt: 0}   ; (and when the window was last read here)
     if (Mod(++Reads, 5) = 0)
         CheckWindowsColors()
     CheckGameFront()
@@ -714,22 +768,32 @@ UpdateCaptions() {
     if (Drag.mode || A_TickCount - ScrollAt < 700 || LoadingEarlier)
         return
     ; The fetcher reads Claude's window in a program of its own (see StartFetcher), so the box never
-    ; waits for it: what it reads comes in by itself (see TookRead). Only if it has stopped (its
-    ; window gone, or nothing from it for 20 s) is the window read here, and it's started again: a
-    ; read here holds the box up for a tenth of a second or more, so a fetcher that's just slow for a
-    ; while (a game keeping the computer busy) is waited for rather.
+    ; waits for it: what it reads comes in by itself (see TookRead). If nothing has come from it for
+    ; 20 s, it's seen to: asked for a read if it's still there (like just after the computer wakes
+    ; from sleep), or started again if it's gone (see StartFetcher), and the box goes on showing what
+    ; it last read meanwhile. A read here holds the box up for a tenth of a second or more (once, for
+    ; 8 s), so the window is read here only while there's no fetcher to wait for: as captions start,
+    ; before the fetcher's first read, and after that only once nothing has come from a fetcher for
+    ; 5 s (a new one has had that long to get going), and once every 5 s at most. (Each time the
+    ; computer woke, the fetcher, still there, was started again, and the window read here, holding
+    ; the box up for a second or more.)
     if FetcherAlive()
         return
     StartFetcher()
+    if (Fetcher.hwnd && DllCall("IsWindow", "ptr", Fetcher.hwnd)
+        || Fetcher.at && (A_TickCount - Max(Fetcher.at, Fetcher.startedAt) < 5000 || A_TickCount - here.readAt < 5000))
+        return UpdateVisibility()   ; (so the box still goes away on time)
     at := MsNow()
     try read := ReadClaude(here)
     catch {
+        here.readAt := A_TickCount
         UpdateVisibility()   ; (so the box still goes away on time)
         return   ; the window changed while it was being read; try again next time
     }
-    took := MsNow() - at, Perf.here++, Perf.hereMs += took
+    here.readAt := A_TickCount
+    readMs := MsNow() - at, Perf.here++, Perf.hereMs += readMs
     if (Perf.here = 1 && Fetcher.at)   ; (not as captions start, before the fetcher's first read)
-        NoteEvent(Format("nothing from the fetcher for {:.0f} s: Claude's window read here ({:.0f} ms)", (A_TickCount - Fetcher.at) / 1000, took))
+        NoteEvent(Format("nothing from the fetcher for {:.0f} s: Claude's window read here ({:.0f} ms)", (A_TickCount - Fetcher.at) / 1000, readMs))
     Digest(read)
 }
 
@@ -802,7 +866,7 @@ ModelBarOf(buttons) {
 
 ; Goes through a read of Claude's window (see ReadClaude): the box shows what's new in it.
 Digest(read) {
-    global Shown, LastChange, LastHwnd, Listening, Waiting, VoiceModeAt, VoiceMode, VoiceMicLive, PageAt, ClaudeWorking, TabSpots, HeyClaudeAt, ClaudeConvo
+    global Shown, LastChange, LastHwnd, Listening, Waiting, VoiceModeAt, VoiceMode, VoiceMicLive, PageAt, ClaudeWorking, TabSpots, HeyClaudeAt, ClaudeConvo, QuickMisses
     hwnd := read.hwnd, now := read.now
     LastHwnd := hwnd
     if (now.convo != "")
@@ -882,7 +946,15 @@ Digest(read) {
     }
     if (read.tabs != "") {   ; (where its page switches are, see ClickTab)
         t := StrSplit(read.tabs, ",")
-        TabSpots := {hwnd: hwnd, chat: {x: Integer(t[1]), y: Integer(t[2])}, code: {x: Integer(t[3]), y: Integer(t[4])}, w: Integer(t[5]), h: Integer(t[6])}
+        TabSpots := {hwnd: hwnd, chat: {x: Integer(t[1]), y: Integer(t[2])}, code: {x: Integer(t[3]), y: Integer(t[4])}, w: Integer(t[5]), h: Integer(t[6]),
+            key: hwnd "," read.tabs}
+        ; After a quick switch that didn't take, every switch went the slow way for the rest of the
+        ; session (see SwitchedYet). Now the quick way's tried again once Claude's switches are seen
+        ; somewhere other than where that click went (they'd moved, or it's another of Claude's
+        ; windows). Not while they're still where it clicked: where the quick switch doesn't take at
+        ; all, every switch would first wait for it to miss again.
+        if (QuickMisses && TabSpots.key != TabSpotsClicked)
+            QuickMisses := 0
     }
     ; Claude's window is scrolled up, so what was read isn't the newest: the box stays as it is until
     ; it's back at the bottom.
@@ -998,13 +1070,16 @@ PageOf(hwnd, &tabs := "") {
 
 ; Clicks Claude's switch to a page (which) where it was last seen, with click messages (no mouse, and
 ; Claude doesn't come to the front), if Claude's window is the same size as then. Whether it did.
+; (Where it clicked is kept, for if it didn't take: see Digest.)
 ClickTab(hwnd, which) {
+    global TabSpotsClicked
     s := TabSpots
     if !(s && s.hwnd = hwnd && DllCall("IsWindow", "ptr", hwnd) && !DllCall("IsIconic", "ptr", hwnd))
         return false
     client := Buffer(16, 0), DllCall("GetClientRect", "ptr", hwnd, "ptr", client)
     if (NumGet(client, 8, "int") != s.w || NumGet(client, 12, "int") != s.h)
         return false
+    TabSpotsClicked := s.HasOwnProp("key") ? s.key : ""
     PostClickAt(hwnd, s.%which%)   ; (see claude-voice-on-off-send.ahk)
     return true
 }
@@ -1045,7 +1120,8 @@ SelectPage(which) {
         hwnd := FindClaudeWindow()
         ; Straight to where its switch was last seen: instant, and Claude stays where it is. If that
         ; didn't take (the switch had moved), it's looked for after all. Either way, it's checked.
-        ; (Where it's missed before, out of a game: the slow way straight away, see SwitchedYet.)
+        ; (Where it's missed before, out of a game: the slow way straight away, see SwitchedYet, till
+        ; Claude's switches are seen somewhere else, see Digest.)
         quick := !(QuickMisses && !GameFront) && ClickTab(hwnd, which)
         how := quick ? "" : PressPageSwitch.Call(hwnd, which)
         clicked := A_TickCount
@@ -1129,6 +1205,7 @@ SwitchPageNow() {
     Critical   ; (runs to the end: see ClickClaude)
     SelectPage(Page = "chat" ? "code" : "chat")
     if (!GameFront && (hwnd := FindClaudeWindow())) {
+        RevealClaude(hwnd)   ; (if the box had it restored unseen, it's seen: it comes to the front on purpose)
         SetWinDelay(-1)
         if (WinGetMinMax(hwnd) = -1)
             WinRestore(hwnd)
@@ -1139,10 +1216,13 @@ SwitchPageNow() {
 ; Goes to one of Claude's sessions or chats (by its title), as clicking it in Claude's sidebar does:
 ; with click messages, so Claude stays where it is (or, if it's out of sight there, pressed through UI
 ; Automation, but not with a game in front, which Claude would come in front of). Whether it could.
+; Its row's looked for around Claude's list of messages, as each read of Claude's window finds the
+; sidebar's rows (see ElementsAround, SidebarRows), not among every button in the window, each of a
+; long session's steps too.
 OpenSession(title) {
     try {
         hwnd := ClaudeToClick()   ; (minimized, it's shown again behind your windows first: see ClaudeToClick)
-        for button in GetElements(hwnd, UIA_BUTTON) {
+        for button in ElementsAround(hwnd, UIA_BUTTON) {
             name := button.name
             if !(name == title || SubStr(name, -StrLen(title) - 1) == " " title) || StartsWith(name, "More options for ")
                 continue
@@ -1308,7 +1388,7 @@ NothingRead() => {you: "", claude: "", live: false, streaming: false, thinking: 
 
 ; Puts what was read from Claude's window (now) in the box, if it's changed. Returns what it went by.
 TakeRead(now) {
-    global Shown, LastChange, Waiting
+    global Shown, LastChange, Waiting, HoldingLogs
     ; In a long reply, your message (and the start of the reply) can drop out of what Claude's window
     ; has loaded, so only the end of the reply was read: it carries on the reply the box already has.
     ; While "I'm listening…" shows, that's the exchange from before it (otherwise the end of that
@@ -1323,6 +1403,7 @@ TakeRead(now) {
     if (now.you != Shown.you || now.claude != Shown.claude || now.live != Shown.live || now.streaming != Shown.streaming
         || now.thinking != Shown.thinking || now.work != Shown.work) {
         Critical   ; so the animation never draws the conversation halfway through being changed
+        HoldingLogs := true   ; (what this notes for the logs is written just after, not while the frames wait: see AddToLog)
         ; Claude's window showing less of the same reply, or its words laid out anew (like a Code
         ; turn tidied up once it's finished), isn't news: the box doesn't come back for it.
         stale := now.you == Shown.you && now.live = Shown.live && now.streaming = Shown.streaming && now.thinking = Shown.thinking
@@ -1341,6 +1422,7 @@ TakeRead(now) {
             Waiting := false
             ShowExchange(now)
         }
+        HoldingLogs := false
         Critical "Off"
         Kick()
     }
@@ -1375,13 +1457,30 @@ ReadEvery(ms) {
 ; started as a helper (see FetchMain), does the reading and hands each read over (see TookRead): the
 ; box goes on drawing meanwhile. Started as captions start (only as themselves: not a test that
 ; borrows their code), and again if it ever stops. It runs without UI Access, so it can be closed
-; like any program.
+; like any program. Once it's gone quiet (see UpdateCaptions), it's seen to here. Still there (its
+; window), it's asked for a read straight away, and only started again if that brings nothing in 20 s
+; either: just after the computer wakes from sleep, its last read is hours old, though it's doing
+; fine, and it used to be started again every time, with Claude's window read here meanwhile. Gone
+; (its window, or before its first read, its program), it's started again straight away, though not
+; within 5 s of its last start, so one that can't keep going isn't started over and over; one just
+; started is given 15 s to send its first read.
 StartFetcher() {
-    if (A_LineFile != A_ScriptFullPath || FetcherKeepingUp() || Fetcher.startedAt && A_TickCount - Fetcher.startedAt < 15000)
+    if (A_LineFile != A_ScriptFullPath || FetcherKeepingUp())
         return
-    ; One that went quiet but is still there (like while the computer slept) goes first: it carried on
-    ; after, beside the new one, and Claude's window was read twice over.
-    if (Fetcher.pid && ProcessExist(Fetcher.pid))
+    if (Fetcher.hwnd && DllCall("IsWindow", "ptr", Fetcher.hwnd)) {   ; still there, just quiet
+        if (Fetcher.askedAt <= Fetcher.at) {   ; (not asked yet, since it last sent something)
+            Fetcher.askedAt := A_TickCount
+            DllCall("PostMessage", "ptr", Fetcher.hwnd, "uint", FetchMessage(), "ptr", 0, "ptr", 0)
+            return
+        }
+        if (A_TickCount - Fetcher.askedAt < 20000)
+            return
+    } else if (Fetcher.startedAt && A_TickCount - Fetcher.startedAt < (!Fetcher.hwnd && Fetcher.pid && ProcessExist(Fetcher.pid) ? 15000 : 5000))
+        return
+    ; One that's stuck (still there, but nothing from it even when asked, or nothing yet 15 s after it
+    ; started) goes first: left, it carried on after, beside the new one, and Claude's window was read
+    ; twice over. Only if it's still the fetcher, though (see FetcherProcess).
+    if FetcherProcess(Fetcher.pid)
         try ProcessClose(Fetcher.pid)
     Fetcher.hwnd := 0, Fetcher.startedAt := A_TickCount
     try {
@@ -1396,6 +1495,30 @@ FetcherKeepingUp() => Fetcher.hwnd && A_TickCount - Fetcher.at < 3000 && DllCall
 
 ; Whether the fetcher is still there to wait for: running, and it's sent something in the last 20 s.
 FetcherAlive() => Fetcher.hwnd && A_TickCount - Fetcher.at < 20000 && DllCall("IsWindow", "ptr", Fetcher.hwnd)
+
+; Whether there's a fetcher at all, quiet or not: its window still there, or, before its first read,
+; its program running.
+FetcherThere() => Fetcher.hwnd ? DllCall("IsWindow", "ptr", Fetcher.hwnd) : Fetcher.pid && ProcessExist(Fetcher.pid)
+
+; Whether the program pid is still the fetcher: an AutoHotkey program with a script window named as
+; FetchMain names it (or, just started, still named after this script). Windows hands a program's
+; number on to a new one once it's gone, so a while after the fetcher went (like once captions come
+; back from being hidden), its old number could be any program, like your game, which mustn't be
+; closed for it.
+FetcherProcess(pid) {
+    if !(pid && ProcessExist(pid))
+        return false
+    was := A_DetectHiddenWindows
+    DetectHiddenWindows true
+    found := false
+    try {
+        for hwnd in WinGetList("ahk_class AutoHotkey ahk_pid " pid)
+            if (WinGetTitle(hwnd) = "Claude captions fetcher" || InStr(WinGetTitle(hwnd), A_ScriptFullPath))
+                found := true
+    }
+    DetectHiddenWindows was
+    return found
+}
 
 ; The message the captions send the fetcher: how often to read (wParam, in ms), or to read now (0).
 FetchMessage() {
@@ -1439,7 +1562,7 @@ TookFullRead() {
         return
     at := MsNow()
     Digest(UnpackRead(text))
-    took := MsNow() - at, Perf.reads++, Perf.readMs += took, Perf.readMax := Max(Perf.readMax, took)
+    digestMs := MsNow() - at, Perf.reads++, Perf.readMs += digestMs, Perf.readMax := Max(Perf.readMax, digestMs)
 }
 
 ; How long the box spent on what isn't drawing, for the note on how smoothly it moves (see
@@ -1517,9 +1640,13 @@ FetchMain(owner) {
     FetchRead()
 }
 
-FetchFailed(e, mode) {   ; (the captions read Claude's window themselves while it's gone, and start it again)
-    ExitApp
-}
+; Something going wrong in the fetcher is noted in FOCUS_LOG, as for the box (see BoxFailed), and it
+; carries on: what was running stops there, and its next read goes as usual. (It used to exit at
+; anything at all, like one call into Claude's window that went wrong, and until the captions had
+; started it again, they read Claude's window themselves, holding the box up.) Only what leaves it
+; unable to go on at all (mode "ExitApp") still ends it, and the captions start it again (see
+; StartFetcher).
+FetchFailed(e, mode) => BoxFailed(e, mode, "in the fetcher")
 
 ; The captions asked it to read every so many ms (wParam), or right now (0).
 FetchAsked(wParam, lParam, msg, hwnd) {
@@ -1639,8 +1766,8 @@ ShowExchange(now, spreadMs := CHECK_EVERY_MS) {
         NoteEvent(Format("Claude's finished reply changed a little ({} letters to {}; new: '{}'): not counted as new", StrLen(Current.words), StrLen(words), Join(added, "', '")))
         stale := true
     }
-    if RegExMatch(now.work, "^(.*\S)\s*·\s*[^·]*$", &took)   ; how long it's taken, and how many tokens (for "Finished")
-        Current.took := took[1]
+    if RegExMatch(now.work, "^(.*\S)\s*·\s*[^·]*$", &spentMatch)   ; how long it's taken, and how many tokens (for "Finished")
+        Current.took := spentMatch[1]
     Current.you := now.you, Current.dim := false, Current.youStatus := now.live ? "LISTENING" : ""
     Current.claude := now.claude, Current.thinking := now.thinking, Current.work := now.work
     Current.claudeStatus := now.thinking ? "THINKING" : now.streaming ? "RESPONDING" : ""
@@ -1785,7 +1912,20 @@ ShowLatestRead() {
 ; A reply's words, leaving out its steps and how it's laid out, to notice new words rather than new
 ; steps, or the same words drawn again differently (like voice mode's words becoming paragraphs
 ; once Claude stops talking).
+; Each read of Claude's window asks for the words of the same reply several times over (whether
+; anything's new, whether a finished reply only changed a little, the words to keep), and for those
+; of the reply the box showed before it. Going through a long reply took a while each time, so the
+; last two worked out are kept, and a reply's words are worked out once a read rather than up to five
+; times. (Kept by the reply exactly as it was, letter for letter, so any change at all works them out
+; again.)
 ReplyWords(markup) {
+    static lastIn := "", lastOut := "", prevIn := "", prevOut := ""
+    if (markup == lastIn)
+        return lastOut
+    if (markup == prevIn) {   ; (the one before: now it's the last one)
+        prevIn := lastIn, lastIn := markup, words := prevOut, prevOut := lastOut, lastOut := words
+        return words
+    }
     text := ""
     for line in StrSplit(markup, "`n") {
         if (StartsWith(line, STEP) || StartsWith(line, STEP_RUNNING))
@@ -1796,7 +1936,9 @@ ReplyWords(markup) {
         text .= line " "
     }
     text := RegExReplace(StrReplace(text, TICK), "\s+", " ")
-    return Trim(RegExReplace(text, " ([,.;:!?…)])", "$1"))
+    words := Trim(RegExReplace(text, " ([,.;:!?…)])", "$1"))
+    prevIn := lastIn, prevOut := lastOut, lastIn := markup, lastOut := words
+    return words
 }
 
 ; Moves the exchange showing into the history, which keeps HISTORY_KEEP of them.
@@ -1866,9 +2008,12 @@ GiveUpWaiting() {
 }
 
 ; While voice mode or dictation is listening: reads just the message box, several times as often as
-; the whole window, so your words show up almost as soon as Claude writes them down.
+; the whole window, so your words show up almost as soon as Claude writes them down. Only while
+; there's no fetcher, though: the fetcher reads them, and sends them over as they change (see
+; FetchWords). (Read here whenever nothing had come from the fetcher for 3 s, the message box was
+; searched ten times a second on the box's own thread, just when Claude was slow to answer.)
 WatchYourWords() {
-    if (Hidden || !LastHwnd || FetcherKeepingUp())   ; (the fetcher sends them, see FetchWords)
+    if (Hidden || !LastHwnd || FetcherThere())
         return
     try said := PromptText(LastHwnd)
     catch
@@ -1983,13 +2128,23 @@ ChatList(hwnd) {
 }
 
 ; The buttons in Claude's window that aren't in the list of messages (chat): its sidebar, the
-; conversation's title, and the message box's (Stop, the mic, voice mode). From the list of messages
-; it goes up a level at a time, looking through the other branches at each level, so the messages
-; themselves are never gone through (see ChatList). Without the list, every button in the window.
-ButtonsAround(hwnd, chat) {
+; conversation's title, and the message box's (Stop, the mic, voice mode), and the Model, Effort and
+; Usage buttons under it (see ElementsAround).
+ButtonsAround(hwnd, chat) => ElementsAround(hwnd, UIA_BUTTON, chat)
+
+; The elements of one type (controlType) in Claude's window that aren't in its list of messages (chat,
+; looked for if it isn't given, see ChatList), as GetElements has them. From the list of messages it
+; goes up a level at a time, looking through the other branches at each level, up to the page itself,
+; so the messages themselves are never gone through (see ChatList): in a long conversation, those are
+; most of the window, and going through them all for one of Claude's buttons held the box up each time
+; it looked. Without the list, every one in the window; and the same if it doesn't get up to the page
+; (Claude's window laid out some other way), rather than leave out what's further up.
+ElementsAround(hwnd, controlType, chat := unset) {
     static walker := 0
+    if !IsSet(chat)
+        chat := ChatList(hwnd)
     if !chat
-        return GetElements(hwnd, UIA_BUTTON)
+        return GetElements(hwnd, controlType)
     if !walker
         ComCall(14, UIA, "ptr*", &walker)   ; RawViewWalker, kept for good
     try {
@@ -2004,18 +2159,17 @@ ButtonsAround(hwnd, chat) {
                 kid := ComPtr(p)
                 ComCall(3, UIA, "ptr", kid, "ptr", el, "int*", &same := 0)   ; CompareElements
                 if !same
-                    for item in ElementsUnder(kid, UIA_BUTTON, 7)   ; (the branch, itself included)
+                    for item in ElementsUnder(kid, controlType, 7)   ; (the branch, itself included)
                         items.Push(item)
                 ComCall(6, walker, "ptr", kid, "ptr*", &p := 0)   ; GetNextSiblingElement
             }
-            ComCall(21, parent, "int*", &type := 0)   ; CurrentControlType
-            if (type = 50030)   ; the page itself (a document): no need to go any higher
-                break
+            ComCall(21, parent, "int*", &parentType := 0)   ; CurrentControlType
+            if (parentType = 50030)   ; the page itself (a document): no need to go any higher
+                return items
             el := parent
         }
-        return items
     }
-    return GetElements(hwnd, UIA_BUTTON)
+    return GetElements(hwnd, controlType)
 }
 
 ReadChat(chat, most := 40) {
@@ -2029,13 +2183,52 @@ ReadChat(chat, most := 40) {
     return out
 }
 
-; The web pages a reply's parts link to, up to three, each once, as {text, url}.
+; The web pages a reply's parts link to, up to three, each once, as {text, url}, in order: its links,
+; and web addresses written out in its words (see AddressesIn), or in a bit of code that's nothing
+; else. (Only its links had pills: asked for a link, Claude often writes the address out, and you
+; had to ask again for one you could click.) A bigger bit of code, like a command, isn't looked in.
 LinksIn(parts) {
     links := [], seen := Map()
-    for part in parts
-        if (part.type = "link" && !seen.Has(part.url) && links.Length < 3)
-            links.Push({text: part.text, url: part.url}), seen[part.url] := true
+    for part in parts {
+        if (part.type = "link")
+            AddLink(links, seen, part.text, part.url)
+        else if (part.type = "item" || part.type = "run" && (!part.code || Trim(part.text) ~= "^\S+$"))
+            for url in AddressesIn(part.text)
+                AddLink(links, seen, url, url)
+    }
     return links
+}
+
+; Adds a link (text, url) to links, unless there are three already, or it's one of them (seen: the
+; same page, written with "www." or without, "http" or "https", or a "/" at the end, counts once:
+; a link's words are often its own address).
+AddLink(links, seen, text, url) {
+    key := StrLower(RegExReplace(url, "i)^https?://(www\.)?|/+$"))
+    if (links.Length < 3 && !seen.Has(key))
+        links.Push({text: text, url: url}), seen[key] := true
+}
+
+; The web addresses written out in some words, in order, as "https://…": each starting with "http://",
+; "https://" or "www.", and without what comes after it in the sentence, like a full stop, or the
+; bracket around it ("(see https://…)"), but keeping one that's its own ("…/Foo_(bar)").
+AddressesIn(text) {
+    out := [], at := 1
+    while (at := RegExMatch(text, "i)(?<![\w@./-])(?:https?://|www\.)[^\s<>`"'``“”‘’]+", &m, at)) {
+        at += m.Len, url := m[0]
+        loop {
+            url := RegExReplace(url, "[.,;:!?*…]+$")
+            last := SubStr(url, -1), StrReplace(url, "(", , , &opens), StrReplace(url, ")", , , &closes)
+            StrReplace(url, "[", , , &opensSq), StrReplace(url, "]", , , &closesSq)
+            if !(last = ")" && closes > opens || last = "]" && closesSq > opensSq)
+                break
+            url := SubStr(url, 1, -1)
+        }
+        if StartsWith(url, "www.")
+            url := "https://" url
+        if (url ~= "i)^https?://(([\w-]+\.)+[a-z]{2,}|localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?([/?#]|$)")
+            out.Push(url)
+    }
+    return out
 }
 
 ; Keeps one of Claude's messages (msg, with its kids and first line, label) in byNo under its number
@@ -2125,45 +2318,100 @@ AddEarlier(earlier) {
 ; has Claude's list of messages scroll up a little at a time for a moment, gathering the older
 ; messages by their numbers as they load (going on from where it got to last time), then scrolls it
 ; back to where it was (the bottom, usually). The older exchanges go above the history, a few at a
-; time and never skipping any. Reading Claude's window waits meanwhile.
+; time and never skipping any. Reading Claude's window waits meanwhile. It goes a step at a time, each
+; on a timer of its own (see OlderStep, OlderRead, OlderBack), with nothing waiting in between: it used
+; to wait for Claude's list right here, step after step, up to three seconds all told, and meanwhile
+; the box couldn't keep step with the screen (only FrameTick's frames came, about 32 a second), just
+; as you scrolled. (So it's done once LoadingEarlier is false again, not when LoadOlder returns.)
 LoadOlder() {
     global LoadingEarlier
-    static reached := Map()
+    static reached := Map()   ; (how far up each conversation it's got, see OlderRead)
     key := ConvKey, first := History.Length ? History[1] : Current
     if (LoadingEarlier || key = "" || !first.HasOwnProp("no") || first.no <= 1 || !LastHwnd || Cleared.Has(key) && Cleared[key].floor)
         return
     if !((chat := ChatList(LastHwnd)) && (scroller := GetPattern(chat, 10004, "{88f4d42a-e881-459d-a77c-73bbbb7e02dc}")))   ; ScrollPattern
         return
-    LoadingEarlier := true, byNo := Map(), older := [], was := 100.0
+    LoadingEarlier := true
+    ; What it's doing, carried from step to step: where Claude's list was (was) and where it's got to
+    ; (at), how far up it goes each step (step), how many steps it's taken (round) and how many tries
+    ; at going back (back), the messages gathered by number (byNo) and the exchanges they make (older).
+    job := {key: key, first: first, chat: chat, scroller: scroller, reached: reached, byNo: Map(), older: [], was: 100.0, at: 0, step: 0, round: 0, back: 0}
+    global OlderJob := job   ; (so captions closing meanwhile can put Claude's list back, see GoAway)
     try {
-        ComCall(6, scroller, "double*", &was)    ; CurrentVerticalScrollPercent
-        ComCall(8, scroller, "double*", &view := 0.0)   ; CurrentVerticalViewSize (how much shows, in percent)
-        at := Min(was, reached.Has(key) ? reached[key] : was), step := Max(0.3, view * 0.9)   ; (every message shows at some step: they're gathered by number)
-        loop 25 {
-            if (A_Index > 1 || at != was) {   ; (first, what's loaded where it is)
-                at := A_Index > 1 ? Max(0, at - step) : at
-                ComCall(4, scroller, "double", -1, "double", at)   ; SetScrollPercent (UIA_ScrollPatternNoScroll sideways)
-                Sleep 80
-            }
-            ReadBack(chat, {you: "", parts: [], newest: "", prevYou: "", streaming: false, done: false, work: "", byNo: byNo})
-            older := ExchangesBefore(byNo, first.no, 8)
-            if (older.Length >= 8 || at <= 0)
-                break
-        }
-        reached[key] := at
+        ComCall(6, scroller, "double*", &was := 100.0)    ; CurrentVerticalScrollPercent
+        job.was := was
+        ComCall(8, scroller, "double*", &viewSize := 0.0)   ; CurrentVerticalViewSize (how much shows, in percent)
+        job.at := Min(was, reached.Has(key) ? reached[key] : was), job.step := Max(0.3, viewSize * 0.9)   ; (every message shows at some step: they're gathered by number)
+    } catch
+        return OlderBack(job)
+    OlderStep(job)
+}
+
+; A step of LoadOlder's (job): Claude's list of messages scrolled up a little (the first time, left
+; where it is, unless it got further up last time), and what's loaded there read a moment later, once
+; it's had time to load (see OlderRead). The first time without scrolling, it's read straight away.
+OlderStep(job) {
+    if (++job.round > 1 || job.at != job.was) {   ; (first, what's loaded where it is)
+        if (job.round > 1)
+            job.at := Max(0, job.at - job.step)
+        try ComCall(4, job.scroller, "double", -1, "double", job.at)   ; SetScrollPercent (UIA_ScrollPatternNoScroll sideways)
+        catch
+            return OlderBack(job)
+        return SetTimer(OlderRead.Bind(job), -80)
     }
-    ; Back where it was. It loads messages as it goes, so it can take a few tries to get there.
-    target := Max(0, Min(100, was))
-    loop 12 {
+    OlderRead(job)
+}
+
+; What's loaded in Claude's list of messages, read for LoadOlder (job): its messages gathered by
+; number, and the exchanges before the oldest one the box has put together from them. Once there are
+; enough (or it's at the top, or it's taken 25 steps), how far up it got is kept for next time, and
+; Claude's list goes back where it was (see OlderBack); otherwise it goes up another step.
+OlderRead(job) {
+    try {
+        ReadBack(job.chat, {you: "", parts: [], newest: "", prevYou: "", streaming: false, done: false, work: "", byNo: job.byNo})
+        job.older := ExchangesBefore(job.byNo, job.first.no, 8)
+    } catch
+        return OlderBack(job)
+    if (job.older.Length >= 8 || job.at <= 0 || job.round >= 25) {
+        job.reached[job.key] := job.at
+        return OlderBack(job)
+    }
+    OlderStep(job)
+}
+
+; Claude's list of messages back where it was before LoadOlder (job). It loads messages as it goes, so
+; it can take a few tries to get there: up to 12, each checked a moment later (see OlderBackYet).
+OlderBack(job) {
+    target := Max(0, Min(100, job.was))
+    while (job.back++ < 12) {
         try {
-            ComCall(4, scroller, "double", -1, "double", target)
-            Sleep 90
-            ComCall(6, scroller, "double*", &now := 0.0)
-            if (target >= 99 ? now >= 99.5 : Abs(now - target) < 0.5)
-                break
+            ComCall(4, job.scroller, "double", -1, "double", target)
+            return SetTimer(OlderBackYet.Bind(job), -90)
         }
     }
-    LoadingEarlier := false
+    OlderLoaded(job)
+}
+
+OlderBackYet(job) {
+    target := Max(0, Min(100, job.was)), olderThere := false
+    try {
+        ComCall(6, job.scroller, "double*", &now := 0.0)
+        olderThere := target >= 99 ? now >= 99.5 : Abs(now - target) < 0.5
+    }
+    ; (Only reading where Claude's list is is tried here: putting the older exchanges in place, if it
+    ; failed inside the try, was tried again on the next step back, up to 12 times, and could put them
+    ; above the history again each time, with nothing noted.)
+    if olderThere
+        return OlderLoaded(job)
+    OlderBack(job)
+}
+
+; LoadOlder's done (job): reading Claude's window goes on, and the older exchanges it found go above
+; the history, unless the box has gone to another conversation meanwhile.
+OlderLoaded(job) {
+    global LoadingEarlier, OlderJob
+    LoadingEarlier := false, OlderJob := ""
+    key := job.key, older := job.older
     if (!older.Length || key != ConvKey)
         return
     earlier := [], from := AfterCleared(key, older, older.Length) + 1   ; (not what you cleared from the box, see ClearChat)
@@ -2286,12 +2534,12 @@ OldestFirst(list) {
 ; "chat|General chat"), or "" if there's no title to go by. (A Cowork session's is named as a Code
 ; session's is: ReadClaude tells them apart.)
 SidebarRows(buttons) {
-    titles := [], current := "", convo := ""
+    titles := [], currentTitle := "", convo := ""
     for button in buttons {
         if StartsWith(button.name, "More options for ")
             titles.Push(SubStr(button.name, 18))
         else if RegExMatch(button.name, "^(.+), rename (\w+)$", &m)
-            current := m[1], convo := (m[2] = "session" ? "code" : "chat") "|" m[1]
+            currentTitle := m[1], convo := (m[2] = "session" ? "code" : "chat") "|" m[1]
     }
     rows := [], seen := Map()
     for button in buttons {
@@ -2306,7 +2554,7 @@ SidebarRows(buttons) {
         seen[best] := true
         rows.Push({title: best, status: Trim(SubStr(name, 1, StrLen(name) - StrLen(best)))})
     }
-    return {rows: rows, current: current, convo: convo}
+    return {rows: rows, current: currentTitle, convo: convo}
 }
 
 ; Reads the chat from the bottom up, adding the parts of Claude's reply to found.parts (newest
@@ -2556,18 +2804,11 @@ class UIChildren {
         el := ComPtr(p)
         ComCall(53, el, "int*", &ctype := 0)   ; CachedControlType
         ComCall(75, el, "ptr", rect)           ; CachedBoundingRectangle
-        return {el: el, type: ctype, name: RegExReplace(CachedText(el, 55), "\s+", " "), kind: CachedText(el, 54),
-            cls: CachedText(el, 62), top: NumGet(rect, 4, "int"), bottom: NumGet(rect, 12, "int")}
+        ; (CachedString, in claude-voice-on-off-send.ahk: one of its properties that's text, as read
+        ; along with it: method 54 for its kind, 55 for its name, 62 for its class)
+        return {el: el, type: ctype, name: RegExReplace(CachedString(el, 55), "\s+", " "), kind: CachedString(el, 54),
+            cls: CachedString(el, 62), top: NumGet(rect, 4, "int"), bottom: NumGet(rect, 12, "int")}
     }
-}
-
-; One of an element's properties that's text, as read along with it (see UIChildren): method 54
-; for its kind, 55 for its name, 62 for its class.
-CachedText(el, method) {
-    ComCall(method, el, "ptr*", &bstr := 0)
-    text := bstr ? StrGet(bstr, "UTF-16") : ""
-    DllCall("OleAut32\SysFreeString", "ptr", bstr)
-    return text
 }
 
 ; ---- Laying out the words ----------------------------------------------------------
@@ -3033,16 +3274,35 @@ FontOf(style) => (style = "code" || style = "pre") ? Look.codeFont : style = "bo
 ; Works out where each exchange sits, top to bottom, and where every line in the conversation is
 ; (View.spans). Scrolled back, the box keeps its place by line (View.topLine), so what you're
 ; looking at stays put as things change below it.
+; The history's lines are only worked out again when the history has changed. While Claude writes,
+; each read changes just the exchange showing, and going through every line of up to HISTORY_KEEP
+; exchanges again each time held the box's frames up. So they're kept (kept.spans), with what they
+; were worked out from: each exchange's own lines (its spans, a new list each time it's laid out)
+; and where it sat. If any of that's different (an exchange added, loaded, laid out again, or moved),
+; they're all worked out again, as before. The exchange showing's lines are, every time.
 Place() {
-    y := 0, spans := []
-    loop History.Length + 1 {
-        ex := A_Index <= History.Length ? History[A_Index] : Current
+    static kept := {from: [], at: [], spans: []}
+    list := History, was := kept, same := was.from.Length = list.Length, y := 0
+    for ex in list {
         ex.y := y
-        for s in ex.spans
-            spans.Push({top: y + s.top, bottom: y + s.bottom})
-        if (A_Index <= History.Length)
-            y += ex.height + Look.exGap
+        if (same && (was.from[A_Index] !== ex.spans || was.at[A_Index] != y))
+            same := false
+        y += ex.height + Look.exGap
     }
+    if !same {
+        from := [], at := [], spans := []
+        for ex in list {
+            lines := ex.spans, top := ex.y
+            from.Push(lines), at.Push(top)
+            for s in lines
+                spans.Push({top: top + s.top, bottom: top + s.bottom})
+        }
+        kept := was := {from: from, at: at, spans: spans}
+    }
+    Current.y := y
+    spans := was.spans.Clone()   ; (a list of its own: the kept one stays as it is)
+    for s in Current.spans
+        spans.Push({top: y + s.top, bottom: y + s.bottom})
     View.total := Current.height ? y + Current.height : Max(0, y - Look.exGap)
     View.spans := spans
 }
@@ -3420,8 +3680,8 @@ BoxMouseDown(wParam, lParam, msg, hwnd) {
         Drag.fixedH := Min(Settings.Lines * Look.lineH, View.total)
         Drag.barTop := Anim.bar ? Anim.bar.top : Look.pad, Drag.barH := Max(24 * Look.s, Drag.fixedH * Drag.fixedH / Max(1, View.total))
         ; Grabbing the bar keeps it where you grabbed it; clicking beside it jumps it there.
-        bar := Anim.bar, pointY := my - Anim.y - Look.tabH   ; from the top of the box
-        Drag.grab := bar && pointY >= bar.y && pointY < bar.y + bar.h ? pointY - bar.y : Drag.barH / 2
+        scrollBar := Anim.bar, pointY := my - Anim.y - Look.tabH   ; from the top of the box
+        Drag.grab := scrollBar && pointY >= scrollBar.y && pointY < scrollBar.y + scrollBar.h ? pointY - scrollBar.y : Drag.barH / 2
         ScrollToBar(pointY)
     }
     DllCall("SetCapture", "ptr", BoxGui.Hwnd)
@@ -3469,8 +3729,8 @@ BoxMouseMove(wParam, lParam, msg, hwnd) {
 BoxMouseUp(wParam, lParam, msg, hwnd) {
     global Drag
     Critical   ; (see BoxMouseDown)
-    if (Catcher && hwnd = Catcher.Hwnd)   ; (on the page, in a game: see CatchPage)
-        return msg = 0x202 ? PassToPage(msg, wParam, lParam) : 0
+    if (Catcher && hwnd = Catcher.Hwnd)   ; (on the page, in a game: see CatchPage; losing the mouse mid-drag ends the drag there too)
+        return PassToPage(msg, wParam, lParam)
     if (SettingsGui && hwnd = SettingsGui.Hwnd)
         return SettingsUp(msg)
     if (InStr(Drag.mode, "peek") = 1) {
@@ -4167,22 +4427,10 @@ SpokenSpot() {
 }
 
 ; How loud Claude's app is right now, from 0 to 1: the loudest of its sound streams. They come and
-; go, so they're looked up again every 2 seconds.
-ClaudeLoudness() {
-    static meters := [], found := 0
-    if (A_TickCount - found > 2000) {
-        try meters := ClaudeSoundMeters()
-        found := A_TickCount
-    }
-    loudest := 0.0
-    for meter in meters {
-        try {
-            ComCall(3, meter, "float*", &peak := 0)   ; GetPeakValue
-            loudest := Max(loudest, peak)
-        }
-    }
-    return loudest
-}
+; go, but finding them asks Windows about every speaker and every stream on it, a few milliseconds
+; on the box's own thread: so they're kept, and looked for again only once one can't be read or
+; Claude has made no sound for 2 seconds, not every 2 seconds while it talks (see ClaudeSoundNow).
+ClaudeLoudness() => ClaudeSoundNow(2000)
 
 ; Shows what following Claude's voice looks like, when it's turned on in the settings: a pretend
 ; voice (with no sound) reads the start of the reply showing at Claude's pace, pausing at the end
@@ -4502,14 +4750,26 @@ WatchPeek() {
 }
 
 ; Claude's own app icon, read from Claude's app (while it's running) as a picture with its
-; see-through corners kept, or "" if it can't be read. Tried again now and then until it can.
+; see-through corners kept, or "" if it can't be read. Tried again now and then until it can. It's
+; read from the program behind Claude's window, not just any claude.exe: Claude Code's command-line
+; tool is named claude.exe too, and one started before the app was the one found first.
 ClaudeLogo() {
     static logo := "", triedAt := -60000, bits := ""
     if (logo || A_TickCount - triedAt < 30000)
         return logo
     triedAt := A_TickCount
     try {
-        if !DllCall("PrivateExtractIconsW", "str", ProcessGetPath("claude.exe"), "int", 0, "int", 128, "int", 128, "ptr*", &icon := 0, "ptr", 0, "uint", 1, "uint", 0) || !icon
+        if !(appWin := FindClaudeWindow()) {
+            ; (In the tray, with no window of Claude's showing: its hidden windows are the app's too,
+            ; as Claude Code's command-line claude.exe has none of its own. With none at all, it's
+            ; tried again in a while.)
+            hiddenToo := DetectHiddenWindows(true)
+            appWin := WinExist("ahk_exe claude.exe")
+            DetectHiddenWindows(hiddenToo)
+            if !appWin
+                return logo
+        }
+        if !DllCall("PrivateExtractIconsW", "str", ProcessGetPath(WinGetPID(appWin)), "int", 0, "int", 128, "int", 128, "ptr*", &icon := 0, "ptr", 0, "uint", 1, "uint", 0) || !icon
             return logo
         info := Buffer(32, 0)   ; ICONINFO
         DllCall("GetIconInfo", "ptr", icon, "ptr", info)
@@ -4733,10 +4993,7 @@ ClosePage() {
     if PageOpen()
         ClosePageWindow()
     CloseBrowserWindow(Browser.old)   ; (one let go of for another, still out of sight: see LetGoOfPage)
-    if Browser.hook
-        DllCall("UnhookWinEvent", "ptr", Browser.hook)
-    if Browser.hook2
-        DllCall("UnhookWinEvent", "ptr", Browser.hook2)
+    UnhookPage()
     Browser := NoPage()
     LastChange := A_TickCount, Opened := true
     PlacePageTab()
@@ -4759,11 +5016,7 @@ CloseBrowserWindow(hwnd) => hwnd && DllCall("PostMessage", "ptr", hwnd, "uint", 
 ; down just as the other page was asked for, and the other never opened.) Its window, or 0.
 LetGoOfPage() {
     old := PageOpen() ? Browser.hwnd : 0
-    if Browser.hook
-        DllCall("UnhookWinEvent", "ptr", Browser.hook)
-    if Browser.hook2
-        DllCall("UnhookWinEvent", "ptr", Browser.hook2)
-    Browser.hook := Browser.hook2 := 0
+    UnhookPage()
     if old
         DllCall("ShowWindowAsync", "ptr", old, "int", 0)   ; SW_HIDE
     return old
@@ -5076,6 +5329,15 @@ WatchPage() {
         "uint", WinGetPID(Browser.hwnd), "uint", 0, "uint", 0, "ptr")   ; EVENT_SYSTEM_MOVESIZESTART to MINIMIZESTART, from the browser
 }
 
+; Stops noticing the page (see WatchPage): nothing more from Windows about it moving, resizing or
+; being minimized, as it closes, or another takes its place, or captions close.
+UnhookPage() {
+    for h in [Browser.hook, Browser.hook2]
+        if h
+            DllCall("UnhookWinEvent", "ptr", h)
+    Browser.hook := Browser.hook2 := 0
+}
+
 ; You moved the page (or resized it): it comes off the box and stays where you put it, out of the
 ; way (let go of it near its place by the box and it snaps back on, see PageDropped), and it keeps
 ; the size you gave it. Only while you have hold of it (see PageEvent): the box's own moves can come
@@ -5164,6 +5426,23 @@ PageSeen() {
 ; a click like any other (on a tab, say).
 PassToPage(msg, wParam, lParam) {
     static press := ""
+    ; Something else took the mouse in the middle of it (WM_CAPTURECHANGED: something came in front
+    ; of the game, say, and the invisible window was put away, see CatchPage), or the mouse is moving
+    ; with the button no longer down (let go where the invisible window never heard of it): the press
+    ; is over, as if you'd let go there. Otherwise the page kept on following the pointer, with no
+    ; button held, until your next click.
+    if (press && (msg = 0x215 && lParam != Catcher.Hwnd || msg = 0x200 && !(wParam & 1))) {   ; (lParam: what took it; wParam & 1: MK_LBUTTON)
+        p := press, press := ""
+        if (msg = 0x200 && Catcher && DllCall("GetCapture", "ptr") = Catcher.Hwnd)
+            DllCall("ReleaseCapture")
+        if p.moved {   ; (dropped, as when you let go: see below)
+            Browser.dragging := Browser.boxDrag := false
+            CatchPage()
+            SetTimer(PageDropped, -1)
+        }
+    }
+    if (msg = 0x215)   ; (nothing for the page itself in that)
+        return 0
     if !PageOpen()
         return 0
     Anim.pageAt := A_TickCount   ; (the pointer's on the page: yours, see WatchMouse)
@@ -5461,13 +5740,13 @@ VeilPicture(l, t, w, h) {
     old := DllCall("SelectObject", "ptr", small, "ptr", hbm, "ptr")
     DllCall("SetStretchBltMode", "ptr", small, "int", 4)   ; HALFTONE
     DllCall("SetBrushOrgEx", "ptr", small, "int", 0, "int", 0, "ptr", 0)
-    took := DllCall("StretchBlt", "ptr", small, "int", 0, "int", 0, "int", sw, "int", sh, "ptr", screen, "int", l, "int", t, "int", w, "int", h, "uint", 0x00CC0020)   ; SRCCOPY
+    copied := DllCall("StretchBlt", "ptr", small, "int", 0, "int", 0, "int", sw, "int", sh, "ptr", screen, "int", l, "int", t, "int", w, "int", h, "uint", 0x00CC0020)   ; SRCCOPY
     DllCall("SelectObject", "ptr", small, "ptr", old)
     DllCall("DeleteDC", "ptr", small)
     DllCall("ReleaseDC", "ptr", 0, "ptr", screen)
     for hwnd in ours
         DllCall("SetWindowDisplayAffinity", "ptr", hwnd, "uint", 0)
-    if took {
+    if copied {
         DllCall("gdiplus\GdipCreateBitmapFromHBITMAP", "ptr", hbm, "ptr", 0, "ptr*", &shot := 0)
         DllCall("gdiplus\GdipCloneBitmapAreaI", "int", 0, "int", 0, "int", sw, "int", sh, "int", 0x26200A, "ptr", shot, "ptr*", &pic := 0)   ; (32-bit, which the blur needs)
         DllCall("gdiplus\GdipDisposeImage", "ptr", shot)
@@ -5490,10 +5769,10 @@ VeilPicture(l, t, w, h) {
         DllCall("gdiplus\GdipDisposeImage", "ptr", pic)
     }
     DllCall("DeleteObject", "ptr", hbm)
-    DllCall("gdiplus\GdipSetSolidFillColor", "ptr", Brush, "uint", ARGB(took ? 0.22 : 0.3, 0x000000))
+    DllCall("gdiplus\GdipSetSolidFillColor", "ptr", Brush, "uint", ARGB(copied ? 0.22 : 0.3, 0x000000))
     DllCall("gdiplus\GdipFillRectangleI", "ptr", cv.g, "ptr", Brush, "int", 0, "int", 0, "int", w, "int", h)
     NoteEvent(Format("the Claude key: the game blurred in {:.0f} ms ({}x{})", MsNow() - at, w, h))
-    cv.solid := took != 0   ; (a picture of the game all over: nothing see-through, see FadeVeil)
+    cv.solid := copied != 0   ; (a picture of the game all over: nothing see-through, see FadeVeil)
     return cv
 }
 
@@ -5511,11 +5790,11 @@ ShowLayered(hwnd, cv, x, y, alpha, w := 0, h := 0) {
 ; It's in a window of its own just under the box's, drawn again only when the box changes shape.
 PlaceGlow(x, y, w, h, a) {
     global GlowGui, GlowCanvas
-    static drawn := "", shown := ""
+    static drawn := "", glowShown := ""
     if (a <= 0.01) {
         if (GlowGui && DllCall("IsWindowVisible", "ptr", GlowGui.Hwnd))
             DllCall("ShowWindow", "ptr", GlowGui.Hwnd, "int", 0)
-        shown := ""
+        glowShown := ""
         return
     }
     if !GlowGui
@@ -5528,10 +5807,10 @@ PlaceGlow(x, y, w, h, a) {
         GlowCanvas := GlowPicture(w, h, tab)
     }
     ; Only when it's changed: sending its picture every frame, over a game, made the box stutter.
-    m := GlowMargin(), place := Round(x - m) "," Round(y - m) "," Round(255 * a) "|" key
-    if (place == shown)
+    m := GlowMargin(), glowSpot := Round(x - m) "," Round(y - m) "," Round(255 * a) "|" key
+    if (glowSpot == glowShown)
         return
-    shown := place
+    glowShown := glowSpot
     ShowLayered(GlowGui.Hwnd, GlowCanvas, Round(x - m), Round(y - m), 255 * a)
     DllCall("SetWindowPos", "ptr", GlowGui.Hwnd, "ptr", BoxGui.Hwnd, "int", 0, "int", 0, "int", 0, "int", 0, "uint", 0x53)   ; just under the box
 }
@@ -5583,14 +5862,14 @@ WatchPageDrag() {
 ; or "" to hide it.
 ShowSnapSpot(spot) {
     global SnapGui, SnapCanvas, Canvas
-    static shown := ""
+    static snapShown := ""
     if !spot {
-        if (SnapGui && shown != "")
-            DllCall("ShowWindow", "ptr", SnapGui.Hwnd, "int", 0), shown := ""
+        if (SnapGui && snapShown != "")
+            DllCall("ShowWindow", "ptr", SnapGui.Hwnd, "int", 0), snapShown := ""
         return
     }
     key := spot.x "," spot.y "," spot.w "," spot.h
-    if (key = shown)
+    if (key = snapShown)
         return
     if !SnapGui
         SnapGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +E0x80000 +E0x20 +E0x08000000")   ; see-through, and clicks go through it
@@ -5611,9 +5890,9 @@ ShowSnapSpot(spot) {
     Canvas := saved
     Critical(was)
     ShowLayered(SnapGui.Hwnd, SnapCanvas, spot.x, spot.y, 255)
-    if (shown = "")
+    if (snapShown = "")
         DllCall("ShowWindow", "ptr", SnapGui.Hwnd, "int", 8)   ; SW_SHOWNA
-    shown := key
+    snapShown := key
 }
 
 ; ---- When older messages were sent ------------------------------------------------
@@ -5626,13 +5905,13 @@ ShowSnapSpot(spot) {
 ; since); side conversations, like a subagent's, don't. Each transcript is read on from where it got
 ; to, a whole line at a time.
 WatchCodeSessions() {
-    static at := Map(), ids := Map(), started := false
+    static at := Map(), ids := Map(), pastFirst := false   ; (pastFirst: once it has looked them all over the first time)
     static busy := Map(), texts := Map()   ; (when each session last did something, "" or 0 once it's done; the messages with words counted)
     global LastChange
     loop files CODE_SESSIONS "\*.jsonl", "R" {
         path := A_LoopFileFullPath, size := A_LoopFileSize
         if !at.Has(path)
-            at[path] := started ? 0 : size
+            at[path] := pastFirst ? 0 : size
         if (size < at[path])   ; (written over: from its end again)
             at[path] := size
         if (size = at[path])
@@ -5714,7 +5993,7 @@ WatchCodeSessions() {
     }
     if (ids.Count > 2000)
         ids := Map(), texts := Map()
-    started := true
+    pastFirst := true
 }
 
 ; How long ago a line of a Code session's transcript happened (by its own time), in seconds; 0 if
@@ -5779,7 +6058,7 @@ NoteTime(you, said, replied := "") {
     if ((key := TimeKey(you)) = "")
         return
     Times[key] := {said: said, replied: replied}
-    try FileAppend(key "`t" said "`t" replied "`n", TIMES_FILE, "UTF-8")
+    AddToLog(TIMES_FILE, key "`t" said "`t" replied "`n")
 }
 
 ; What a message is known by: its letters and numbers (the first 120 of them).
@@ -5797,14 +6076,18 @@ GiveTimes(ex) {
 
 ClockTime(stamp) => FormatTime(stamp, SubStr(stamp, 1, 8) = SubStr(A_Now, 1, 8) ? "h:mm tt" : "MMM d, h:mm tt")
 
-; Reads the transcripts from the last 30 days, newest first, about 20 ms at a time so the box stays
-; smooth, going on from where it got to in each (they grow as a session goes on). Once it has read
-; them all, the older messages in the box get their times (see FillTimes), and it checks again for
-; new ones a minute later.
+; Reads the transcripts from the last 30 days, newest first, 3 ms at a time so the box stays smooth
+; (timed by MsNow: timed by A_TickCount, which only moves in steps of 15 or 16 ms, 20 ms came out as
+; 16 to 31, several frames missed each time), going on from where it got to in each (they grow as a
+; session goes on). The first time, it reads just the end of each (TRANSCRIPT_TAIL): the box only
+; needs the times of recent messages, and a long Code session's transcript runs to 150 MB, nearly all
+; of it what Claude's tools gave back (its last 4 MB still held the last ten things you said in it).
+; Once it has read them all, the older messages in the box get their times (see FillTimes), and it
+; checks again for new ones a minute later.
 ReadTranscripts() {
-    static files := [], at := Map(), next := 1, open := "", pending := ""
+    static files := [], at := Map(), next := 1, open := "", pending := "", lineAt := -1   ; (lineAt: where the line it last read started)
     if (next = 1 && !open && !files.Length) {
-        loop files EnvGet("USERPROFILE") "\.claude\projects\*.jsonl", "R"
+        loop files CODE_SESSIONS "\*.jsonl", "R"
             if (DateDiff(A_Now, A_LoopFileTimeModified, "Days") <= 30)
                 files.Push({path: A_LoopFileFullPath, time: A_LoopFileTimeModified})
         loop files.Length - 1 {   ; newest first
@@ -5814,8 +6097,8 @@ ReadTranscripts() {
                     t := files[A_Index], files[A_Index] := files[A_Index + 1], files[A_Index + 1] := t
         }
     }
-    started := A_TickCount
-    while (A_TickCount - started < 20) {
+    sliceAt := MsNow()
+    while (MsNow() - sliceAt < 3) {
         if !open {
             if (next > files.Length) {   ; all read
                 files := [], next := 1
@@ -5831,12 +6114,28 @@ ReadTranscripts() {
             }
             if at.Has(file.path)
                 open.Pos := at[file.path]
-            pending := ""
+            else if (open.Length > TRANSCRIPT_TAIL) {   ; (the first time: just its end, from the start of a line)
+                open.Pos := open.Length - TRANSCRIPT_TAIL
+                try open.ReadLine()
+            }
+            pending := "", lineAt := -1
         }
         if open.AtEOF {
-            at[files[next].path] := open.Pos, open.Close(), open := "", next++
+            ; A last line Claude Code is still writing (no newline at its end yet) is read again, whole,
+            ; next time, as WatchCodeSessions does: carried on from the middle of it, that message never
+            ; got its time.
+            endAt := open.Pos
+            if (lineAt >= 0 && endAt > lineAt) {
+                try {
+                    open.Pos := endAt - 1
+                    if (open.ReadUChar() != 10)   ; (not a newline)
+                        endAt := lineAt
+                }
+            }
+            at[files[next].path] := endAt, open.Close(), open := "", next++
             continue
         }
+        lineAt := open.Pos
         try TranscriptLine(open.ReadLine(), &pending)   ; (one odd line doesn't stop the rest)
     }
     SetTimer(ReadTranscripts, 30)
@@ -5872,10 +6171,18 @@ TranscriptLine(line, &pending) {
     KeepTime(c[1], when, &pending)
 }
 
-; A transcript's time (its year, month, day, hour, minute and second, in UTC) as a time here.
+; A transcript's time (its year, month, day, hour, minute and second, in UTC) as a time here, by
+; Windows' clock rules for that day: a message from before the clocks went forward or back an hour
+; still shows the time it was here then. (Taking just this moment's difference from UTC, for all
+; 30 days of them, put those an hour out, and every new one too once captions ran on past a change.)
 LocalTime(m) {
-    static offset := Round(DateDiff(A_Now, A_NowUTC, "Seconds") / 900) * 15
-    return DateAdd(m[1] m[2] m[3] m[4] m[5] m[6], offset, "Minutes")
+    static utcTime := Buffer(16), hereTime := Buffer(16)   ; SYSTEMTIMEs
+    NumPut("ushort", Integer(m[1]), "ushort", Integer(m[2]), "ushort", 0, "ushort", Integer(m[3]),
+        "ushort", Integer(m[4]), "ushort", Integer(m[5]), "ushort", Integer(m[6]), "ushort", 0, utcTime)
+    if DllCall("SystemTimeToTzSpecificLocalTime", "ptr", 0, "ptr", utcTime, "ptr", hereTime)   ; (0: the time zone this computer's in)
+        return Format("{:04}{:02}{:02}{:02}{:02}{:02}", NumGet(hereTime, 0, "ushort"), NumGet(hereTime, 2, "ushort"),
+            NumGet(hereTime, 6, "ushort"), NumGet(hereTime, 8, "ushort"), NumGet(hereTime, 10, "ushort"), NumGet(hereTime, 12, "ushort"))
+    return DateAdd(m[1] m[2] m[3] m[4] m[5] m[6], Round(DateDiff(A_Now, A_NowUTC, "Seconds") / 900) * 15, "Minutes")   ; (if Windows couldn't say: this moment's difference)
 }
 
 ; Keeps when you said something (text, as it's written in the transcript), by its words.
@@ -5948,7 +6255,7 @@ StartTyping() {
     global Composing, EditGui, EditBox, TypedFrom
     if (Composing || !Settings.TypeBox)
         return
-    c := Look.colors, fill := Format("{:06X}", InputFill()), ink := Format("{:06X}", c.text)
+    c := Look.colors, fill := Format("{:06X}", InputFill()), inkColor := Format("{:06X}", c.text)
     if !EditGui {
         EditGui := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale +Owner" BoxGui.Hwnd)
         EditGui.MarginX := EditGui.MarginY := 0
@@ -5957,7 +6264,7 @@ StartTyping() {
         EditGui.OnEvent("Escape", StopTyping)
     }
     EditGui.BackColor := fill
-    EditBox.SetFont("s" Settings.FontSize " c" ink, Settings.Font)
+    EditBox.SetFont("s" Settings.FontSize " c" inkColor, Settings.Font)
     EditBox.Opt("+Background" fill)
     EditBox.Value := Typed
     TypedFrom := WinExist("A")
@@ -6059,6 +6366,7 @@ SendToClaude(text, backTo) {
         ShowNote("Claude isn't open, so that wasn't sent.")
         return false
     }
+    RevealClaude(hwnd)   ; (if the box had it restored unseen, it's seen: it comes to the front on purpose)
     saved := ClipboardAll(), sent := false
     try {
         PressInMessageBox(hwnd, "^{End}")
@@ -6067,9 +6375,19 @@ SendToClaude(text, backTo) {
         if !ClipWait(1)
             throw Error("What you typed couldn't be put on the clipboard, so it wasn't sent.")
         Send "^v"
-        want := RegExReplace(Trim(text), "\s+", " "), deadline := A_TickCount + 2500
-        while (!InStr(PromptText(hwnd), want) && A_TickCount < deadline)
+        ; Till it shows up there, Claude's message box is found once, and after that only asked what it
+        ; holds (finding it each time went through all of Claude's window, a long conversation too,
+        ; every 60 ms). If it can't be asked (Claude laid it out anew), it's found again. Either way,
+        ; it's found afresh for the last look, before Enter.
+        want := RegExReplace(Trim(text), "\s+", " "), deadline := A_TickCount + 2500, box := PromptBox(hwnd)
+        while (A_TickCount < deadline) {
+            try {
+                if InStr(PromptBoxValue(box), want)
+                    break
+            } catch
+                box := PromptBox(hwnd)
             Sleep 60
+        }
         if !InStr(PromptText(hwnd), want)
             throw Error("What you typed didn't show up in Claude's message box, so it wasn't sent.")
         Send "{Enter}"
@@ -6099,6 +6417,18 @@ SendToClaude(text, backTo) {
     if (backTo && backTo != hwnd && WinExist(backTo))
         try WinActivate(backTo)
     return sent
+}
+
+; What Claude's message box (box, as PromptBox found it) holds, with its spacing tidied, as PromptText
+; has it: asked of the box itself, without finding it in Claude's window again. Throws if it can't be
+; asked (it isn't there, or Claude has laid it out anew), so it can be found again.
+PromptBoxValue(box) {
+    if !(pattern := GetPattern(box.el, 10002, "{a94cd8b1-0844-4cd6-9d2d-640537ab39e9}"))   ; ValuePattern
+        throw Error("Claude's message box can't say what it holds.")
+    ComCall(4, pattern, "ptr*", &bstr := 0)   ; CurrentValue
+    text := bstr ? StrGet(bstr, "UTF-16") : ""
+    DllCall("OleAut32\SysFreeString", "ptr", bstr)
+    return Trim(RegExReplace(text, "\s+", " "))
 }
 
 ; Whether Claude's message box (in its window hwnd) still has a word in it: as text, or as a chip (a
@@ -6187,7 +6517,7 @@ ReadFollow() {
     if (talking && !line)   ; (saying something else)
         return
     done := talking ? line - 1 : Reader.said   ; every line up to here has been read
-    waiting := 0, came := false, block := 0, spot := 0
+    heldCount := 0, came := false, block := 0, spot := 0   ; (heldCount: words still waiting for the voice)
     for t in part.tokens {
         if (t.block != block)
             block := t.block, spot := 0
@@ -6199,11 +6529,11 @@ ReadFollow() {
         if (t.block <= done || t.block = line && start < upTo)
             t.born := now, t.per := 0, came := true
         else
-            waiting++
+            heldCount++
     }
     if came
         ex.fadeUntil := Max(ex.fadeUntil, now + Look.motion.fade), Kick()
-    if !waiting {
+    if !heldCount {
         ex.revealEnd := Min(ex.revealEnd, now)
         if !talking
             SetTimer(ReadFollow, 0)
@@ -6242,21 +6572,21 @@ SpeakableLines(markup) {
 
 ; Windows' voice for reading out loud, set up with the voice and speed picked.
 Speaker() {
-    static voice := ""
-    if !voice {
-        voice := ComObject("SAPI.SpVoice")
-        UseReaderVoice(voice)
+    static sapi := ""
+    if !sapi {
+        sapi := ComObject("SAPI.SpVoice")
+        UseReaderVoice(sapi)
     }
-    return voice
+    return sapi
 }
 
-UseReaderVoice(voice := Speaker()) {
+UseReaderVoice(sapi := Speaker()) {
     try {
-        voices := voice.GetVoices()
+        voices := sapi.GetVoices()
         loop voices.Count
             if (voices.Item(A_Index - 1).GetDescription() = Settings.ReadVoice)
-                voice.Voice := voices.Item(A_Index - 1)
-        voice.Rate := Round((Settings.ReadSpeed - 5) * 1.6)
+                sapi.Voice := voices.Item(A_Index - 1)
+        sapi.Rate := Round((Settings.ReadSpeed - 5) * 1.6)
     }
 }
 
@@ -6363,8 +6693,13 @@ Blips(kind, volume := 100) {
     key := kind "|" volume
     if made.Has(key)
         return made[key]
-    if (made.Count > 8)
+    if (made.Count > 8) {
+        ; Windows plays a sound straight from its recording here, while it's playing: so whatever's
+        ; still playing stops first, before the recordings go (or it could play on from freed memory,
+        ; a burst of noise, while you slide the volume with words coming in).
+        DllCall("winmm\PlaySoundW", "ptr", 0, "ptr", 0, "uint", 0)
         made.Clear()
+    }
     rate := 22050, list := [], gain := (volume / 100) ** 1.6   ; (loudness goes by the square, roughly)
     switch kind {
         case "Soft clicks":   ; a soft key press: a little tap of noise, with a low knock under it
@@ -6594,7 +6929,7 @@ FrameLoop() {
             SettingsFrame()
         wasDrawing := drew, drew := settingsMoving || Anim.lastDraw != before
         if drew {
-            took := MsNow() - at, stats.drawn++, stats.busy += took, stats.longest := Max(stats.longest, took)
+            drawMs := MsNow() - at, stats.drawn++, stats.busy += drawMs, stats.longest := Max(stats.longest, drawMs)
             if wasDrawing   ; (frame after frame: moving)
                 stats.moving++, stats.movingMs += gap, stats.missed += Max(0, Round(gap / (GameStep() * 1000 / MonitorHz())) - 1), stats.worst := Max(stats.worst, gap)
         }
@@ -6620,7 +6955,32 @@ NoteEvent(text) {
     if (A_TickCount - since > 60000)
         since := A_TickCount, count := 0
     if (++count <= 40)
-        try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") "  " text "`n", FOCUS_LOG, "UTF-8")
+        AddToLog(FOCUS_LOG, FormatTime(, "yyyy-MM-dd HH:mm:ss") "  " text "`n")
+}
+
+; Adds a line to one of the logs (file). While a read of Claude's window is being taken in (see
+; TakeRead), the box's frames wait for it, and writing to a file can take a few ms: so a line noted
+; meanwhile is held back, with the time it was noted, and written just after, by a timer. Any lines
+; still held back are written first, so the logs keep their order.
+AddToLog(file, line) {
+    if HoldingLogs {
+        HeldLogs.Push([file, line])
+        SetTimer(WriteHeldLogs, -1)
+        return
+    }
+    if HeldLogs.Length
+        WriteHeldLogs()
+    try FileAppend(line, file, "UTF-8")
+}
+
+; Writes the lines held back for the logs (see AddToLog). It only ever runs once the read has been
+; taken in, so it stops holding them back too: if taking it in went wrong partway (and never got to
+; stop holding them back itself), nothing stays held back.
+WriteHeldLogs() {
+    global HeldLogs, HoldingLogs := false
+    lines := HeldLogs, HeldLogs := []
+    for entry in lines
+        try FileAppend(entry[2], entry[1], "UTF-8")
 }
 
 ; Waits for the next refresh of the screen the box is on (its vertical blank), so frames keep step
@@ -6687,7 +7047,7 @@ FrameTick() {
     at := MsNow(), gap := at - lastAt, lastAt := at, before := Anim.lastDraw
     Frame()
     if (!Anim.looping && Anim.lastDraw != before) {
-        took := MsNow() - at, stats.drawn++, stats.busy += took, stats.longest := Max(stats.longest, took)
+        drawMs := MsNow() - at, stats.drawn++, stats.busy += drawMs, stats.longest := Max(stats.longest, drawMs)
         if (gap < 250)   ; (frame after frame: moving)
             stats.moving++, stats.movingMs += gap, stats.missed += Max(0, Round(gap / 16.7) - 1), stats.worst := Max(stats.worst, gap)
     }
@@ -6729,8 +7089,8 @@ Frame() {
     }
     ; The list beside the box opens and closes softly, and so does voice mode's blue light.
     Anim.panel := Approach(Anim.panel, Anim.panelTarget, smooth ? dt / 180 : 1)
-    state := VoiceState(), listening := state != "" ? 1 : 0, toneTo := state = "speaking" ? 1 : 0, thinkTo := state = "thinking" ? 1 : 0
-    Anim.listen := Approach(Anim.listen, listening, smooth ? dt / 400 : 1)
+    state := VoiceState(), listenTo := state != "" ? 1 : 0, toneTo := state = "speaking" ? 1 : 0, thinkTo := state = "thinking" ? 1 : 0
+    Anim.listen := Approach(Anim.listen, listenTo, smooth ? dt / 400 : 1)
     Anim.tone := Approach(Anim.tone, toneTo, smooth ? dt / 350 : 1)
     Anim.think := Approach(Anim.think, thinkTo, smooth ? dt / 350 : 1)
     ; While you scroll back, a strip at the top holds the name of whose words you're reading (see
@@ -6754,7 +7114,7 @@ Frame() {
         || (smooth && now < Current.fadeUntil) || (Current.newAt && now - Current.newAt < NEW_BADGE_MS)
         || (Anim.liveAt && now - Anim.liveAt < LIVE_BADGE_MS)
         || Anim.above != above || (Anim.above && now - Anim.aboveAt < 3300) || slot && (Anim.tabLeft != slot.left || Anim.tabRight != slot.right)
-        || Anim.panel != Anim.panelTarget || Anim.listen != listening || Anim.tone != toneTo || Anim.think != thinkTo || smooth && now - Anim.switchAt < 360
+        || Anim.panel != Anim.panelTarget || Anim.listen != listenTo || Anim.tone != toneTo || Anim.think != thinkTo || smooth && now - Anim.switchAt < 360
         || Anim.sticky != stickyTo || Anim.times != timesTo || now - Anim.lineGoneAt < 900 || Anim.handed != handedTo
         || Anim.peek != peekTo || Anim.peekHover != hoverTo || now - Anim.wiggleAt < 900 || now - Anim.badgeAt < 400 || Anim.links != linksTo
         || now - Anim.jiggleAt < 700 || now - Current.doneAt < 600 || now - Anim.spinAt < 900 || Anim.peek > 0 && (ClaudeBusy() || Anim.codeWorking && Page = "chat")
@@ -6785,15 +7145,20 @@ Frame() {
     following := FollowFrame(now, dt, smooth)
     ; "Listening", "Thinking" and "Responding" pulse gently, which only needs drawing now and then:
     ; up to 60 times a second for the quicker ones (like Claude's spark), 10 for the rest. Slow
-    ; looping effects like these look no different drawn more often.
+    ; looping effects like these look no different drawn more often. Over a game, Claude's spark and
+    ; the step it's on are drawn just 15 times a second: each time draws the whole box again and
+    ; hands it to Windows to lay over the game, and through a long Code task (the spark going the
+    ; whole time) that was 60 times a second, next to the game, for a small spark. (Not voice mode's
+    ; light, which swells with the voices as they go.)
     pulsing := Anim.target && (Current.note != "" || Current.youStatus != "" || Current.claudeStatus != "" || Current.work != "" || Current.queued != ""
         || Anim.listen > 0 || Anim.panel > 0)
     ; With nothing left to do, the last frame is drawn and the animation stops, unless Claude is
     ; talking, when the glow can move on at any moment, or the times are waiting to fade.
     idle := !(moving || following || pulsing || floating || Voice.on || View.scrolled && Anim.times > 0)
     period := FramePeriod(), quick := Current.thinking || Current.work != "" || Current.claudeStatus != "" || Anim.listen > 0
+    pulseMs := !quick ? 100 : Gaming() && Anim.listen <= 0 ? 66 : Max(period - 1, 15)
     if (moving || idle || Anim.dirty || drifted || following && now - Anim.lastDraw >= period - 1
-        || pulsing && now - Anim.lastDraw >= (quick ? Max(period - 1, 15) : 100)) {
+        || pulsing && now - Anim.lastDraw >= pulseMs) {
         Anim.dirty := false
         try Draw()
     }
@@ -7257,6 +7622,8 @@ DrawBox() {
         SetTimer(CheckSeen, 0)
         Anim.hover := Anim.hoverTarget := 0
         Anim.panel := Anim.panelTarget := 0   ; the list beside it closes too
+        if ModelMenu   ; (and the list of models, and Claude's menu with it: see ToggleHidden)
+            SetTimer(CloseModelMenu, -1)
         SetTimer(TrimMemory, -5000)
         global Opened := false
         if (Anim.hot != "")
@@ -7704,17 +8071,17 @@ TintWord(t, x, y, a, lit) {
         return
     ; A color for the middle of each letter (and each end of the word), for a brush that blends
     ; from one to the next across the word.
-    colors := Buffer(4 * (n + 2)), places := Buffer(4 * (n + 2))
-    NumPut("uint", ARGB(a * lit[1] * 0.65, Look.colors.claude), colors, 0), NumPut("float", 0, places, 0)
+    tints := Buffer(4 * (n + 2)), places := Buffer(4 * (n + 2))
+    NumPut("uint", ARGB(a * lit[1] * 0.65, Look.colors.claude), tints, 0), NumPut("float", 0, places, 0)
     for j, letter in letters {
         right := j < n ? letters[j + 1].x : w
-        NumPut("uint", ARGB(a * lit[j] * 0.65, Look.colors.claude), colors, 4 * j)
+        NumPut("uint", ARGB(a * lit[j] * 0.65, Look.colors.claude), tints, 4 * j)
         NumPut("float", Max(0.001, Min(0.999, (letter.x + right) / 2 / w)), places, 4 * j)
     }
-    NumPut("uint", ARGB(a * lit[n] * 0.65, Look.colors.claude), colors, 4 * (n + 1)), NumPut("float", 1, places, 4 * (n + 1))
+    NumPut("uint", ARGB(a * lit[n] * 0.65, Look.colors.claude), tints, 4 * (n + 1)), NumPut("float", 1, places, 4 * (n + 1))
     NumPut("float", x, "float", 0, "float", x + w, "float", 0, ends)
     DllCall("gdiplus\GdipCreateLineBrush", "ptr", ends, "ptr", ends.Ptr + 8, "uint", 0, "uint", 0, "int", 0, "ptr*", &brush := 0)
-    DllCall("gdiplus\GdipSetLinePresetBlend", "ptr", brush, "ptr", colors, "ptr", places, "int", n + 2)
+    DllCall("gdiplus\GdipSetLinePresetBlend", "ptr", brush, "ptr", tints, "ptr", places, "int", n + 2)
     NumPut("float", x, "float", y + dy, spot)
     DllCall("gdiplus\GdipDrawString", "ptr", Canvas.g, "wstr", t.text, "int", -1, "ptr", f.font, "ptr", spot, "ptr", TextFormat, "ptr", brush)
     DllCall("gdiplus\GdipDeleteBrush", "ptr", brush)
@@ -8235,7 +8602,7 @@ PressCompact(hwnd, btn, front, tries) {
     if compact {
         ClickClaude(compact.el, hwnd)
         NoteEvent("compacting: clicked Compact session in Claude's Usage menu")
-        SetTimer(() => ClaudeButton(hwnd, "Compact session") && ClickClaude(btn.el, hwnd), -500)   ; (its menu closes, if it didn't by itself)
+        SetTimer(() => FindByPrefix(hwnd, UIA_BUTTON, "Compact session") && ClickClaude(btn.el, hwnd), -500)   ; (its menu closes, if it didn't by itself; looked for in the whole window, as above, see ClaudeButton)
         return ReadSoon()
     }
     if (!open && tries < 4)   ; (not open yet: looks again shortly)
@@ -8313,36 +8680,133 @@ DrawModelMenu(rows, w, pad) {
 
 ; Clicks one of Claude's buttons (el, in its window hwnd) with click messages all at once: no mouse,
 ; Claude doesn't come forward, and nothing waits (a wait here would let FrameLoop in first, see
-; ApplySettings). Whether it could.
+; ApplySettings). Whether it could. (It's claude-voice-on-off-send.ahk's PostClick but for the 30 ms
+; that waits between the button going down and up; the two could be one if PostClick took how long
+; to wait, as PostClickAt does.)
 ClickClaude(el, hwnd) {
+    if (hwnd = Unhid.hwnd)   ; (restored unseen to click in: kept so a while longer, see HideClaudeAgain)
+        Unhid.at := A_TickCount
     if !(at := SpotIn(hwnd, el))   ; (see claude-voice-on-off-send.ahk)
         return false
     PostClickAt(hwnd, at)
     return true
 }
 
-; One of Claude's buttons whose name starts with prefix, or "".
+; One of Claude's buttons whose name starts with prefix, or "": its Model, Effort and Usage buttons,
+; under its message box. They're looked for around Claude's list of messages (see ElementsAround), as
+; each read of Claude's window finds them (see ModelBarOf), not among every button in the window, each
+; of a long session's steps too: that held the box up for a moment with each click on the model bar.
+; (What Claude's menus have, once they open over the page, is still looked for in the whole window.)
 ClaudeButton(hwnd, prefix) {
-    for item in GetElements(hwnd, UIA_BUTTON)
+    for item in ElementsAround(hwnd, UIA_BUTTON)
         if StartsWith(item.name, prefix)
             return item
     return ""
 }
 
-; Claude's window, ready to click in from behind: restored if it's minimized, but not brought forward,
-; and kept behind your other windows. Restored, it's given a moment to lay itself out again first: a
-; click straight away went nowhere (on a laptop, where Claude's window is often minimized, the model
-; menu never opened until you opened it in Claude yourself).
-ClaudeToClick() {
-    if !(hwnd := FindClaudeWindow())
-        return 0
+; Claude's window, ready to click in from behind (see ReadyToClick), or 0 if it isn't open.
+ClaudeToClick() => (hwnd := FindClaudeWindow()) ? ReadyToClick(hwnd) : 0
+
+; A window of Claude's (hwnd), ready to click in from behind: restored if it's minimized, but not
+; brought forward, and kept behind your other windows. Restored, it's given a moment to lay itself out
+; again first: a click straight away went nowhere (on a laptop, where Claude's window is often
+; minimized, the model menu never opened until you opened it in Claude yourself). And unseen: see-
+; through while it's restored, and minimized again once the box is done with it (see HideClaudeAgain).
+; (On one screen, with nothing in front of it, it came up every time you switched a chat or a model
+; in the box.) Still to be tried on the laptop, where it matters: whether Claude takes a click while
+; it's restored like this but covered up, behind a maximized window or a game. Chromium pays no mind
+; to clicks sent to a window it takes to be out of sight, which is why it's restored at all, and right
+; at the bottom, under a window that fills the screen, it may still take itself to be. If so, this
+; only restores Claude and minimizes it again, and the box's fallbacks through UI Automation (see
+; KeyOpen, PressInClaude, OpenedYet) are what do the work there, a moment later. Not tried either:
+; whether Windows flashes Claude's taskbar button when the lock turns its coming forward down.
+ReadyToClick(hwnd) {
     if DllCall("IsIconic", "ptr", hwnd) {
+        ; (Restored, Claude comes to the front by itself, as if you'd clicked it: Windows' foreground
+        ; lock keeps it from doing so meanwhile, and if it does, whatever was in front gets it back, see
+        ; HideClaudeAgain.)
+        Unhid.front := WinExist("A"), Unhid.since := Unhid.at := A_TickCount
+        try WinSetTransparent(0, hwnd)
+        DllCall("LockSetForegroundWindow", "uint", 1)   ; LSFW_LOCK
         DllCall("ShowWindow", "ptr", hwnd, "int", 4)   ; SW_SHOWNOACTIVATE
         DllCall("SetWindowPos", "ptr", hwnd, "ptr", 1, "int", 0, "int", 0, "int", 0, "int", 0, "uint", 0x13)   ; HWND_BOTTOM: behind your windows; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
-        NoteEvent("Claude's window was minimized: shown again behind your other windows, so the box can click in it")
-        Sleep 300
+        Unhid.hwnd := hwnd
+        SetTimer(HideClaudeAgain, 100)
+        NoteEvent("Claude's window was minimized: restored unseen behind your other windows, so the box can click in it")
+        ; The moment it's given to lay itself out: nothing else runs meanwhile, as the box's actions
+        ; that click in Claude run to the end (see ClickClaude), and letting other things in here could
+        ; let FrameLoop start, which would keep this waiting as long as the box moves (see TakeMouse).
+        ; So the box's frames are drawn here instead, one after another, and it doesn't freeze for it
+        ; (it did, for about a third of a second, at the first click on a model, the effort or the ring
+        ; with Claude minimized). Only once for each restore: restored, it isn't minimized next time.
+        was := A_IsCritical
+        Critical
+        try {
+            while (A_TickCount - Unhid.since < 300) {
+                if Anim.running
+                    try Frame()
+                Sleep 16
+            }
+        } finally {   ; (whatever happens, the lock isn't left on: other programs would open behind yours)
+            Critical(was)
+            ; The lock's let go of again, unless a game's in front: then it's kept, as GuardGame has
+            ; it. (Let go of, the game could lose the front to Claude after all, until the next check
+            ; took it again, up to a second later. With the Claude key, the box's own window has the
+            ; front, and the lock stays off, see ShowVeil.)
+            DllCall("LockSetForegroundWindow", "uint", 2)   ; LSFW_UNLOCK
+            if !Handed
+                GuardGame(GameFront)
+        }
     }
+    if (hwnd = Unhid.hwnd)
+        Unhid.at := A_TickCount
     return hwnd
+}
+
+; Claude's window, restored unseen for the box to click in (see ReadyToClick): minimized again once
+; the box has been done with it for UNHID_MS (Claude's model menu closed, Claude on the page you
+; switched it to), and then seen again, so it's as you left it. If you go to it meanwhile (it comes to
+; the front), or minimize it yourself, it's seen straight away, and left as it is. (In front just after
+; it was restored, it came by itself: whatever was in front, like a game, gets the front back. When the
+; box brings it to the front itself, it's seen first, see RevealClaude.) What it waits for besides
+; (the model menu, the page) doesn't count while captions are hidden (Hide captions), where there's
+; nothing to pick from and the reads that say Claude's on the page wait, nor past UNHID_MAX_MS, so it's
+; never left restored and unseen for long: hidden with the list of models open, it stayed that way for
+; as long as captions were. (The box going away by itself closes the list of models, see DrawBox.)
+HideClaudeAgain() {
+    hwnd := Unhid.hwnd
+    if !(hwnd && DllCall("IsWindow", "ptr", hwnd))
+        return (Unhid.hwnd := 0, SetTimer(HideClaudeAgain, 0))
+    if (DllCall("GetForegroundWindow", "ptr") = hwnd && A_TickCount - Unhid.since < 2000 && Unhid.front && Unhid.front != hwnd && WinExist(Unhid.front)) {
+        try SetWinDelay(-1), WinActivate(Unhid.front)
+        return
+    }
+    if (DllCall("GetForegroundWindow", "ptr") = hwnd || DllCall("IsIconic", "ptr", hwnd)) {
+        try WinSetTransparent("Off", hwnd)
+        return (Unhid.hwnd := 0, SetTimer(HideClaudeAgain, 0))
+    }
+    if (A_TickCount - Unhid.at < UNHID_MS
+        || A_TickCount - Unhid.at < UNHID_MAX_MS && !Hidden && (ModelMenu || PageAsked.page != "")) {
+        try if (WinGetTransparent(hwnd) != 0)   ; (Claude's own window sets its styles anew now and then)
+            WinSetTransparent(0, hwnd)
+        return
+    }
+    DllCall("ShowWindow", "ptr", hwnd, "int", 7)   ; SW_SHOWMINNOACTIVE
+    try WinSetTransparent("Off", hwnd)
+    Unhid.hwnd := 0, SetTimer(HideClaudeAgain, 0)
+}
+
+; Claude's window (hwnd), as the box brings it to the front on purpose (to send to it, or to show the
+; page it switched to): if the box had it restored unseen (see ReadyToClick), it's seen again, and left
+; as it is from then on. Otherwise, just after it was restored, HideClaudeAgain took it for Claude
+; coming forward by itself, and gave the front straight back to whatever had it: with Claude
+; minimized, the ring's /compact never got typed ("Couldn't bring Claude to the front").
+RevealClaude(hwnd) {
+    if !(hwnd && hwnd = Unhid.hwnd)
+        return
+    SetTimer(HideClaudeAgain, 0)
+    try WinSetTransparent("Off", hwnd)
+    Unhid.hwnd := 0
 }
 
 ; One of Claude's buttons that opens a menu (el), opened as a keyboard would: put in focus through UI
@@ -8401,6 +8865,11 @@ WatchModelMenu() {
         return SetTimer(WatchModelMenu, 0)
     if (m.key == "opening" || !m.items.Length)
         return
+    ; (While you look at the list, Claude's window, if the box had it restored unseen for this, isn't
+    ; minimized again: that closed its menu, and the list with it, 30 s on, under your pointer. Only
+    ; when the box can't be seen does that stop, see HideClaudeAgain.)
+    if (Unhid.hwnd = m.hwnd && Anim.shown && !Hidden)
+        Unhid.at := A_TickCount
     for it in m.items
         if SpotIn(m.hwnd, it.el)
             return
@@ -8716,14 +9185,18 @@ SelectOrInvoke(el) {
 ; Does something to one of Claude's controls (el) through UI Automation (press, like Invoke), for
 ; when click messages from behind don't do: Claude could come forward for it, so Windows' foreground
 ; lock keeps it from taking the front meanwhile, and whatever was in front (a game) gets it back if
-; it did.
+; it did. Then the lock's taken again if a game's in front, as GuardGame has it (see ReadyToClick).
 PressInClaude(el, press) {
+    if Unhid.hwnd   ; (restored unseen to click in: kept so a while longer, see HideClaudeAgain)
+        Unhid.at := A_TickCount
     front := WinExist("A")
     DllCall("LockSetForegroundWindow", "uint", 1)   ; LSFW_LOCK
     try press(el)
     DllCall("LockSetForegroundWindow", "uint", 2)   ; LSFW_UNLOCK
     if (front && WinExist("A") != front)
         try SetWinDelay(-1), WinActivate(front)
+    if !Handed
+        GuardGame(GameFront)
 }
 
 ; Closes the list of models, and Claude's menu with it (by clicking its button again) if it's still open.
@@ -9466,12 +9939,12 @@ DrawStepper(row, n, xr, mid, a, on) {
     for i, cx in [left + d / 2, xr - d / 2] {
         can := i = 1 ? v > row.low : v < row.high, hot := on && can && SetUI.hot = "step-" n "-" i
         FillCircle(cx, mid, d / 2, ARGB(a * (hot ? 0.2 : 0.08), c.text))
-        ink := ARGB(a * (can ? 0.8 : 0.3), c.text)
+        inkColor := ARGB(a * (can ? 0.8 : 0.3), c.text)
         NumPut("float", cx - arm, "float", mid, "float", cx + arm, "float", mid, points)
-        DrawLines(points, 2, 1.6 * s, ink)
+        DrawLines(points, 2, 1.6 * s, inkColor)
         if (i = 2) {
             NumPut("float", cx, "float", mid - arm, "float", cx, "float", mid + arm, points)
-            DrawLines(points, 2, 1.6 * s, ink)
+            DrawLines(points, 2, 1.6 * s, inkColor)
         }
         if (on && can)
             AddSpot("step-" n "-" i, cx - d / 2, mid - d / 2, d, d)
@@ -9483,10 +9956,10 @@ DrawStepper(row, n, xr, mid, a, on) {
 ; Your own colors, as round swatches; click one to change it. To their left, Default puts them all
 ; back (click it twice: the first click asks "Sure?").
 DrawSwatches(row, n, xr, mid, a, on) {
-    s := Look.s, c := Look.colors, colors := StrSplit(Settings.CustomColors, ","), r := 10 * s, step := 46 * s, f := SetUI.fonts.tiny
+    s := Look.s, c := Look.colors, swatchHexes := StrSplit(Settings.CustomColors, ","), r := 10 * s, step := 46 * s, f := SetUI.fonts.tiny
     custom := Settings.Theme = "Custom", cy := mid - 7 * s
-    for i, hex in colors {
-        cx := xr - step / 2 - (colors.Length - i) * step, hot := on && SetUI.hot = "color-" n "-" i, name := COLOR_NAMES[i]
+    for i, hex in swatchHexes {
+        cx := xr - step / 2 - (swatchHexes.Length - i) * step, hot := on && SetUI.hot = "color-" n "-" i, name := COLOR_NAMES[i]
         FillCircle(cx, cy, r + (hot ? 3 : 1.5) * s, ARGB(a * (hot ? 0.55 : 0.25), c.text))
         FillCircle(cx, cy, r, ARGB(a * (custom ? 1 : 0.6), Integer("0x" hex)))   ; (softer while another theme is picked)
         DrawWord(name, f, cx - TextWidth(name, f) / 2, TextY(f, cy + r + 9 * s), a * (hot ? 0.95 : 0.55), c.text, 0)
@@ -9494,20 +9967,20 @@ DrawSwatches(row, n, xr, mid, a, on) {
         if on
             AddSpot("color-" n "-" i, cx - step / 2, cy - r - 4 * s, step, 2 * r + 24 * s)
     }
-    cx := xr - step / 2 - colors.Length * step - 6 * s, hot := on && SetUI.hot = "colors-default"
-    armed := SetUI.colorsResetAt && FrameNow - SetUI.colorsResetAt < 3000, ink := armed ? c.claude : c.text
-    FillCircle(cx, cy, r + (hot ? 3 : 1.5) * s, ARGB(a * (armed ? 0.6 : hot ? 0.55 : 0.25), ink))
+    cx := xr - step / 2 - swatchHexes.Length * step - 6 * s, hot := on && SetUI.hot = "colors-default"
+    armed := SetUI.colorsResetAt && FrameNow - SetUI.colorsResetAt < 3000, inkColor := armed ? c.claude : c.text
+    FillCircle(cx, cy, r + (hot ? 3 : 1.5) * s, ARGB(a * (armed ? 0.6 : hot ? 0.55 : 0.25), inkColor))
     FillCircle(cx, cy, r, ARGB(a, c.bg))
     ; A circle with an arrow at its end, going around to the left: back to how it was.
     ar := r * 0.5, arc := 280, start := 300
-    DrawArc(cx, cy, ar, start, -arc, 1.6 * s, ARGB(a * (armed || hot ? 1 : 0.75), ink))
+    DrawArc(cx, cy, ar, start, -arc, 1.6 * s, ARGB(a * (armed || hot ? 1 : 0.75), inkColor))
     end :=(start - arc) * 0.0174533, ex := cx + ar * Cos(end), ey := cy + ar * Sin(end)
     dx := Sin(end), dy := -Cos(end), len := 4.2 * s, points := Buffer(24)   ; (the way the arrow is going: around to the left)
     NumPut("float", ex - len * (dx * 0.77 - dy * 0.64), "float", ey - len * (dy * 0.77 + dx * 0.64), "float", ex, "float", ey,
         "float", ex - len * (dx * 0.77 + dy * 0.64), "float", ey - len * (dy * 0.77 - dx * 0.64), points)
-    DrawLines(points, 3, 1.6 * s, ARGB(a * (armed || hot ? 1 : 0.75), ink))
+    DrawLines(points, 3, 1.6 * s, ARGB(a * (armed || hot ? 1 : 0.75), inkColor))
     name := armed ? "Sure?" : "Default"
-    DrawWord(name, f, cx - TextWidth(name, f) / 2, TextY(f, cy + r + 9 * s), a * (armed || hot ? 0.95 : 0.55), ink, 0)
+    DrawWord(name, f, cx - TextWidth(name, f) / 2, TextY(f, cy + r + 9 * s), a * (armed || hot ? 0.95 : 0.55), inkColor, 0)
     SetUI.defaultSpot := {x: cx, y: cy + r}
     if on
         AddSpot("colors-default", cx - step / 2, cy - r - 4 * s, step, 2 * r + 24 * s)
@@ -9531,14 +10004,14 @@ OpenPopup(row, n, spot := "", items := "") {
         return
     below := u.H - 12 * s - (spot.y + spot.h + 4 * s), above := spot.y - 16 * s
     down := below >= Min(items.Length, 8) * rowH + 8 * s || below >= above
-    shown := Max(1, Min(items.Length, 8, Floor(((down ? below : above) - 8 * s) / rowH)))
+    rowsShown := Max(1, Min(items.Length, 8, Floor(((down ? below : above) - 8 * s) / rowH)))
     value := n ? RowValue(row) : row.value, at := 1
     for i, item in items
         if (item = value)
             at := i
-    h := shown * rowH + 8 * s
-    u.popup := {row: row, n: n, items: items, value: value, shown: shown, rowH: rowH, x: spot.x, w: spot.w, h: h,
-        y: down ? spot.y + spot.h + 4 * s : spot.y - 4 * s - h, first: Max(1, Min(at - shown // 2, items.Length - shown + 1))}
+    h := rowsShown * rowH + 8 * s
+    u.popup := {row: row, n: n, items: items, value: value, shown: rowsShown, rowH: rowH, x: spot.x, w: spot.w, h: h,
+        y: down ? spot.y + spot.h + 4 * s : spot.y - 4 * s - h, first: Max(1, Min(at - rowsShown // 2, items.Length - rowsShown + 1))}
     u.tip := ""
     SettingsKick()
 }
@@ -9583,11 +10056,11 @@ DrawTip() {
     x := Max(12 * s, Min(at.x - 22 * s, u.W - w - 12 * s)), y := at.y + 16 * s
     if (y + h > u.H - 8 * s)
         y := at.y - 16 * s - h
-    a := u.tipA, fill := c.light ? 0x2B2A28 : Blend(c.bg, 0xFFFFFF, 0.16), ink := c.light ? 0xF5F4EE : c.text
+    a := u.tipA, fill := c.light ? 0x2B2A28 : Blend(c.bg, 0xFFFFFF, 0.16), inkColor := c.light ? 0xF5F4EE : c.text
     FillRoundRect(x + s, y + 4 * s, w, h, 10 * s, ARGB(a * 0.22, 0x000000))
     FillRoundRect(x, y, w, h, 10 * s, ARGB(a, fill))
     for i, line in lines
-        DrawWord(line, f, x + pad, TextY(f, y + pad - 3 * s + (i - 0.5) * lineH), a * 0.95, ink, 0)
+        DrawWord(line, f, x + pad, TextY(f, y + pad - 3 * s + (i - 0.5) * lineH), a * 0.95, inkColor, 0)
 }
 
 ; Text broken into lines no wider than width, at spaces.
@@ -9751,8 +10224,8 @@ SettingsUp(msg) {
 
 ; A slider (the n-th setting) follows the mouse (at mx on screen), in its steps.
 SlideTo(n, mx) {
-    row := SettingRows()[n], bar := SetUI.sliders[n]
-    k := Max(0, Min(1, (mx - SetUI.x - bar.x) / bar.w)), step := row.HasOwnProp("step") ? row.step : 1
+    row := SettingRows()[n], sliderBar := SetUI.sliders[n]
+    k := Max(0, Min(1, (mx - SetUI.x - sliderBar.x) / sliderBar.w)), step := row.HasOwnProp("step") ? row.step : 1
     ChangeSetting(row.key, Round((row.low + k * (row.high - row.low)) / step) * step, false)
 }
 
@@ -9813,14 +10286,24 @@ RunVersion(name) {
     ExitApp
 }
 
-; An earlier version you switched to from the settings (see RunVersion) that's running, or 0.
+; An earlier version you switched to from the settings (see RunVersion) that's running, or 0. (Seeing
+; hidden windows and matching part of a title are both put back as they were after, as OtherCaptions
+; does, for the same reason.)
 OlderCaptions() {
+    wasHidden := A_DetectHiddenWindows, wasMatch := A_TitleMatchMode
     DetectHiddenWindows true
     SetTitleMatchMode 2
-    for hwnd in WinGetList("\captions-versions\ ahk_class AutoHotkey")
-        if (hwnd != A_ScriptHwnd && InStr(WinGetTitle(hwnd), "claude-captions.ahk"))
-            return hwnd
-    return 0
+    found := 0
+    try {
+        for hwnd in WinGetList("\captions-versions\ ahk_class AutoHotkey")
+            if (hwnd != A_ScriptHwnd && InStr(WinGetTitle(hwnd), "claude-captions.ahk")) {
+                found := hwnd
+                break
+            }
+    }
+    DetectHiddenWindows wasHidden
+    SetTitleMatchMode wasMatch
+    return found
 }
 
 ; Changes a setting from the settings window (save: and saves it). It shows on the box right away,
@@ -9874,11 +10357,11 @@ ChangeSetting(key, value, save := true) {
 ; Picks one of your colors (the i-th: background, words, you, Claude, code) in Windows' color
 ; picker, and switches the box to your colors.
 PickColor(i) {
-    colors := StrSplit(Settings.CustomColors, ",")
-    if ((picked := ChooseColor(colors[i], SettingsGui ? SettingsGui.Hwnd : 0)) = "")
+    swatchHexes := StrSplit(Settings.CustomColors, ",")
+    if ((picked := ChooseColor(swatchHexes[i], SettingsGui ? SettingsGui.Hwnd : 0)) = "")
         return
-    colors[i] := picked, joined := ""
-    for j, color in colors
+    swatchHexes[i] := picked, joined := ""
+    for j, color in swatchHexes
         joined .= (j > 1 ? "," : "") color
     Settings.CustomColors := joined, Settings.Theme := "Custom"
     SaveSettings()
@@ -10009,6 +10492,10 @@ ToggleHidden(itemName, *) {
     ToLive()
     if !Hidden
         Shown := NothingRead()   ; show the current exchange again
+    ; The list of models closes, and Claude's menu with it (left open, Claude's window was kept
+    ; restored unseen for as long as the box was hidden, see HideClaudeAgain).
+    if (Hidden && ModelMenu)
+        SetTimer(CloseModelMenu, -1)
     UpdateVisibility()
     ; The page open under the box goes out of sight while it's hidden, and comes back after.
     if PageOpen() {

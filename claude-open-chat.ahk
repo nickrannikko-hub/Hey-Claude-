@@ -21,7 +21,10 @@ LOG_FILE   := A_ScriptDir "\" RegExReplace(A_ScriptName, "\.ahk$") "-log.txt"
 ; -----------------------------------------------------------------------------
 
 ; UI Automation lets the script find Claude's buttons by their names instead of by screen position.
-UIA := ComObject("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+; If Claude's window stops answering for a moment, each request gives up after 4 seconds instead of
+; Windows' usual 20, so the button can't hang that long (as in claude-voice-on-off-send.ahk).
+UIA := ComObject("{e22ad333-b25f-460c-83d0-0581107395c9}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")   ; CUIAutomation8
+try ComCall(63, ComObjQuery(UIA, "{34723aff-0c9d-49d0-9896-7ab52df8cd8a}"), "uint", 4000)   ; IUIAutomation2 TransactionTimeout
 UIA_BUTTON := 50000, UIA_RADIO := 50013, UIA_GROUP := 50026
 LogLines := []
 
@@ -118,7 +121,9 @@ IsChatHeader(name) => StartsWith(name, CHAT_NAME ", rename")
 FindClaudeWindow() {
     best := 0, bestArea := 0
     for hwnd in WinGetList("ahk_exe claude.exe ahk_class Chrome_WidgetWin_1") {
-        if (WinGetTitle(hwnd) = "")
+        ; (not untitled ones, nor see-through ones that can't be clicked, like the layer Claude puts over
+        ; all the screens when it uses the computer: that one's the biggest, but it has no buttons)
+        if (WinGetTitle(hwnd) = "" || WinGetExStyle(hwnd) & 0x08000020)   ; WS_EX_NOACTIVATE | WS_EX_TRANSPARENT
             continue
         WinGetPos(, , &w, &h, hwnd)
         if (w * h > bestArea)
@@ -166,13 +171,21 @@ GetElements(hwnd, controlType) {
     return ElementsUnder(UiaPtr(p), controlType)
 }
 
-; Returns every element of one type inside root, as {el, name}.
+; Returns every element of one type inside root, as {el, name}. Their names come along with the
+; list, in one go (as in claude-voice-on-off-send.ahk): asking Claude's window for each one's name
+; separately takes a round trip each, and in a long chat there can be hundreds of buttons, looked
+; over again every quarter second while it waits for the chat to show.
 ElementsUnder(root, controlType) {
+    static cache := 0
+    if !cache {
+        ComCall(20, UIA, "ptr*", &cache)   ; CreateCacheRequest, kept for good
+        ComCall(3, cache, "int", 30005)    ; AddProperty: name
+    }
     v := Buffer(24, 0)                                           ; VARIANT holding the control type
     NumPut("ushort", 3, v, 0), NumPut("int", controlType, v, 8)
     ComCall(23, UIA, "int", 30003, "ptr", v, "ptr*", &p := 0)    ; CreatePropertyCondition(ControlType)
     cond := UiaPtr(p)
-    ComCall(6, root, "int", 4, "ptr", cond, "ptr*", &p := 0)     ; FindAll(descendants)
+    ComCall(8, root, "int", 4, "ptr", cond, "ptr", cache, "ptr*", &p := 0)   ; FindAllBuildCache(descendants)
     found := UiaPtr(p)
     ComCall(3, found, "int*", &count := 0)                       ; Length
     items := []
@@ -180,7 +193,7 @@ ElementsUnder(root, controlType) {
         try {
             ComCall(4, found, "int", A_Index - 1, "ptr*", &p := 0)   ; GetElement
             el := UiaPtr(p)
-            ComCall(23, el, "ptr*", &bstr := 0)                     ; CurrentName
+            ComCall(55, el, "ptr*", &bstr := 0)                     ; CachedName
             name := bstr ? StrGet(bstr, "UTF-16") : ""
             DllCall("OleAut32\SysFreeString", "ptr", bstr)
             items.Push({el: el, name: Trim(RegExReplace(name, "\s+", " "))})

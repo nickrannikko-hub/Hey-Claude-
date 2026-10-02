@@ -22,6 +22,7 @@
 ; claude-hey-claude.ahk borrows this script's code and calls RunVoiceButton(true), which only turns
 ; voice mode or dictation on, and leaves them alone if they're already on. Running this script with
 ; "start-only" does the same. The listener turns conversation mode off: one message per "Hey Claude".
+; claude-voice-on-off.ahk borrows it too, with NO_SEND turned on: the same button, without the sending.
 
 #Requires AutoHotkey v2.0 64-bit
 #SingleInstance Force   ; a second press replaces a running one, so it can end dictation early
@@ -38,6 +39,8 @@ MAX_TALK_MS    := 180000  ; however it seems, stop dictation (and send what was 
 BEEP_WHEN_READY := true   ; beep once dictation is listening, so you know when to talk
 KEEP_GOING_MS  := 1000    ; conversation mode: once Claude has finished replying, listen again this long after (ms). 0 = off (claude-hey-claude.ahk turns it off)
 NEXT_WORDS_MS  := 7000    ; in conversation mode, how long it waits for your next message before it stops listening
+NO_SEND        := false   ; true: what you dictate just stays in the message box, never sent (and so no conversation mode,
+                          ; with nothing sent for Claude to reply to). claude-voice-on-off.ahk turns it on, after its #Include
 ; In conversation mode, a message ending with one of these ends the conversation. A message that's
 ; nothing but a sign-off (like "Okay, I'm done.") isn't sent. Longer phrases go before shorter ones
 ; they contain (like "see you later" before "see you").
@@ -75,13 +78,18 @@ RunVoiceButton(startOnly := false) {
     LogLines.Length := 0
     Log("Starting")
     DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")   ; work in real screen pixels
+    ; No waiting after each step with a window, like bringing Claude to the front: AutoHotkey otherwise
+    ; waits a tenth of a second after each one, for nothing here, and that was most of the time "Hey
+    ; Claude" took to bring Claude up. (Restoring Claude from minimized still gets its moment, see OpenClaude.)
+    SetWinDelay(-1)
     try {
         hwnd := OpenClaude()
         Log("Claude is in front")
         ; Right after launch the page needs a moment to load. (Loading, it's given a moment more to
         ; settle before voice mode's button is clicked, see StartVoice; already there, it isn't.)
+        ; The page switch it waits for is kept, to tell which page is showing below.
         looked := A_TickCount
-        if !WaitFor(() => FindByPrefix(hwnd, UIA_RADIO, "Chat and Cowork"), 20000)
+        if !(chatTab := WaitFor(() => FindByPrefix(hwnd, UIA_RADIO, "Chat and Cowork"), 20000))
             throw Error("Couldn't read Claude's window. It may still be loading, so try the button again.")
         loading := A_TickCount - looked > 200
 
@@ -103,11 +111,11 @@ RunVoiceButton(startOnly := false) {
             ; A "Hey Claude" conversation is pausing between messages; this press ends it.
             IniWrite(0, STATE_FILE, "conversation", "active")
             Log("Ended the conversation")
-        } else if !OnChatPage(hwnd) {
+        } else if !OnChatPage(hwnd, chatTab) {
             Log("On the Code page, so using dictation")
-            ToggleDictation(hwnd)
+            ToggleDictation(hwnd, buttons)
         } else if dictating {
-            ToggleDictation(hwnd)
+            ToggleDictation(hwnd, buttons)
         } else if VoiceIsOn(hwnd, buttons) {
             if startOnly
                 Log("Voice mode is already on")
@@ -121,10 +129,10 @@ RunVoiceButton(startOnly := false) {
                 buttons := GetElements(hwnd, UIA_BUTTON), loading := true
             }
             if (voiceBtn := FirstNamed(buttons, n => n == "Use voice mode")) {
-                StartVoice(hwnd, voiceBtn, buttons, loading)
+                StartVoice(hwnd, voiceBtn, loading)
             } else {
                 Log("Voice mode isn't available here, so using dictation")
-                ToggleDictation(hwnd)
+                ToggleDictation(hwnd, buttons)
             }
         }
     } catch as err {
@@ -140,15 +148,17 @@ RunVoiceButton(startOnly := false) {
 
 ; ---- Dictation --------------------------------------------------------------
 
-ToggleDictation(hwnd) {
-    if (stopBtn := FindButton(hwnd, IsDictationStop)) {
+; (buttons: Claude's buttons, if they've just been looked at, so they aren't looked for again.)
+ToggleDictation(hwnd, buttons := "") {
+    if (stopBtn := FirstNamed(buttons || GetElements(hwnd, UIA_BUTTON), IsDictationStop)) {
         PressButton(stopBtn.el)
         Log("Dictation stopped")
         try IniDelete(STATE_FILE, "conversation")   ; this press also ends any conversation it was part of
-        SendWhenTranscribed(hwnd, IniRead(STATE_FILE, "dictation", "textBefore", ""), 8000)
+        if !NO_SEND   ; (with NO_SEND, what you said just stays in the message box)
+            SendWhenTranscribed(hwnd, IniRead(STATE_FILE, "dictation", "textBefore", ""), 8000)
         return
     }
-    if !(dictateBtn := WaitFor(() => FindButton(hwnd, n => n == "Dictate"), 8000)) {
+    if !(dictateBtn := (buttons && FirstNamed(buttons, n => n == "Dictate")) || WaitFor(() => FindButton(hwnd, n => n == "Dictate"), 8000)) {
         if FindButton(hwnd, n => n == "Press and hold to record")
             throw Error("Claude's mic is set to 'Hold to record'. Turn that off in Dictation settings "
                 . "(the arrow next to the mic) so this button can switch dictation on and off.")
@@ -158,23 +168,27 @@ ToggleDictation(hwnd) {
     ; say anything, say a sign-off like "goodbye", or when the button or something else stops it.
     ; The "active" flag lets a button press during the pause between messages end it too.
     ; It also stays where it started: switching page, chat or session ends it, and nothing new
-    ; turns on in the place you switched to.
-    if KEEP_GOING_MS
+    ; turns on in the place you switched to. (Not with NO_SEND: nothing is sent for Claude to reply to.)
+    keepGoing := KEEP_GOING_MS && !NO_SEND
+    if keepGoing
         IniWrite(1, STATE_FILE, "conversation", "active")
-    startedIn := WhereAmI(hwnd)
+    startedIn := keepGoing ? WhereAmI(hwnd) : ""   ; (only looked at when it keeps going: it's three more looks over Claude's window)
     try {
         firstWordsMs := FIRST_WORDS_MS
         loop {
-            ; Remember what was already in the message box, so only new words trigger a send.
+            ; Remember what was already in the message box, so only new words trigger a send. It's
+            ; noted in quotes, which Windows takes off again when it's read back. (Without them, Windows
+            ; took off the draft's own quotes, when it started and ended with one: it came back
+            ; different, and stopping dictation with no new words sent it.)
             textBefore := PromptText(hwnd)
-            IniWrite(textBefore, STATE_FILE, "dictation", "textBefore")
+            IniWrite('"' textBefore '"', STATE_FILE, "dictation", "textBefore")
             StartDictation(hwnd, dictateBtn)
             watch := WatchForSilence(hwnd, firstWordsMs)
             if !watch.talked {
                 Log("Nothing was said, so nothing was sent")
-            } else {
+            } else if !NO_SEND {   ; (with NO_SEND, what you said just stays in the message box)
                 text := WaitForTranscript(hwnd, textBefore, 15000)
-                if (KEEP_GOING_MS && textBefore = "" && IsOnlySignOff(text)) {
+                if (keepGoing && textBefore = "" && IsOnlySignOff(text)) {
                     PressInMessageBox(hwnd, "^a{Delete}")
                     Log("Heard '" text "', so the conversation is over (not sent)")
                     return
@@ -183,13 +197,13 @@ ToggleDictation(hwnd) {
                     SendPrompt(hwnd)
                     Log("Sent: " text)
                 }
-                if (KEEP_GOING_MS && EndsWithSignOff(text)) {
+                if (keepGoing && EndsWithSignOff(text)) {
                     Log("You signed off, so the conversation is over")
                     return
                 }
             }
 
-            if (!KEEP_GOING_MS || watch.ended != "quiet")
+            if (!keepGoing || watch.ended != "quiet")
                 return
             ; Listen again only once Claude has finished replying, so you don't talk over the reply.
             if !WaitForReply(hwnd, startedIn)
@@ -205,7 +219,7 @@ ToggleDictation(hwnd) {
             firstWordsMs := NEXT_WORDS_MS
         }
     } finally {
-        if KEEP_GOING_MS
+        if keepGoing
             try IniDelete(STATE_FILE, "conversation")
     }
 }
@@ -524,30 +538,18 @@ IsDictationStop(name) => name == "Stop dictation" || name == "Finish dictation"
 
 ; ---- Voice mode -------------------------------------------------------------
 
-; (seen: Claude's buttons, as just looked at; loading: the page was still loading a moment ago.)
-StartVoice(hwnd, voiceBtn, seen := "", loading := true) {
-    before := Map()
-    for item in (seen || GetElements(hwnd, UIA_BUTTON))
-        before[item.name] := true
+; (loading: the page was still loading a moment ago.) It's done once it has clicked: the next press
+; tells whether voice mode is still on by Claude's buttons (see VoiceIsOn). (It used to wait 2.5 s
+; more, to note which buttons voice mode showed, which nothing read: "Hey Claude" noticed voice mode
+; that much later, and didn't hear a goodbye or another "Hey Claude" meanwhile.)
+StartVoice(hwnd, voiceBtn, loading := true) {
     if loading
         Sleep 400   ; let the chat finish settling before clicking
     ; From behind a game, pressing it without the mouse is tried first (a real click needs Claude in front).
     if !(Behind && (PressButton(voiceBtn.el), WaitFor(() => FindButton(hwnd, IsVoiceModeControl) || !FindButton(hwnd, n => n == "Use voice mode"), 2500)))
         ClickEl(voiceBtn.el, hwnd)
     Log("Clicked 'Use voice mode'")
-    SaveState(true, hwnd, false)   ; saved right away in case the button is pressed again quickly
-
-    ; Note what voice mode looks like, so the next press can tell whether it's still on.
-    Sleep 2500
-    after := ButtonNames(hwnd)
-    startHides := !after.Has("Use voice mode")
-    appeared := []
-    for name in after
-        if !before.Has(name)
-            appeared.Push(name)
-    Log("During voice mode the 'Use voice mode' button " (startHides ? "disappears" : "stays"))
-    Log("Buttons that appeared: " JoinNames(appeared))
-    SaveState(true, hwnd, startHides)
+    SaveState(true, hwnd)   ; saved right away in case the button is pressed again quickly
 }
 
 StopVoice(hwnd) {
@@ -614,10 +616,9 @@ VoiceIsOn(hwnd, buttons := "") {
     return true
 }
 
-SaveState(on, hwnd := 0, startHides := false) {
+SaveState(on, hwnd := 0) {
     IniWrite(on ? 1 : 0, STATE_FILE, "voice", "on")
     IniWrite(hwnd, STATE_FILE, "voice", "window")
-    IniWrite(startHides ? 1 : 0, STATE_FILE, "voice", "startHides")
 }
 
 ; A button that only shows during voice mode.
@@ -635,13 +636,44 @@ IsEndVoiceButton(name) {
 ; Windows' level meters for the sound Claude's app is playing, one per sound stream it has open.
 ClaudeSoundMeters() => ClaudeAudio("{C02216F6-8C67-4B5B-9D00-D008E73E0064}")   ; IAudioMeterInformation
 
+; How loud Claude's app is right now, from 0 to 1: the loudest of its sound streams. Finding the
+; streams means asking Windows about every speaker and every sound stream on it, a few milliseconds
+; each time, so they're found once and kept. They're looked for again only once a meter couldn't be
+; read (a stream that closed), or Claude has made no sound for lookAgainMs (it may have opened a new
+; one: its streams come and go), and then at most every lookAgainMs. Everything that asks shares them.
+ClaudeSoundNow(lookAgainMs := 2000) {
+    static meters := [], soundFoundAt := 0, soundHeardAt := 0, soundMissed := false
+    now := A_TickCount
+    if (!soundFoundAt || now - soundFoundAt > lookAgainMs && (soundMissed || now - soundHeardAt > lookAgainMs)) {
+        try meters := ClaudeSoundMeters()
+        soundFoundAt := now, soundMissed := false
+    }
+    loudest := 0.0
+    for meter in meters {
+        try {
+            ComCall(3, meter, "float*", &peak := 0)   ; GetPeakValue
+            loudest := Max(loudest, peak)
+        } catch
+            soundMissed := true
+    }
+    if (loudest > 0.01)
+        soundHeardAt := now
+    return loudest
+}
+
 ; Something about each sound stream Claude's app has open (the interface iid of its audio session),
 ; like its level meter or its volume, on every speaker; [] if Windows can't say.
 ClaudeAudio(iid) {
+    static devices := ""   ; (Windows' list of sound devices, made once and kept)
     out := []
     try {
-        devices := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")   ; MMDeviceEnumerator
-        ComCall(3, devices, "int", 0, "uint", 1, "ptr*", &p := 0)   ; EnumAudioEndpoints(speakers, active)
+        if !devices
+            devices := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")   ; MMDeviceEnumerator
+        try ComCall(3, devices, "int", 0, "uint", 1, "ptr*", &p := 0)   ; EnumAudioEndpoints(speakers, active)
+        catch {
+            devices := ""   ; (Windows' sound service may have started again: a new list next time)
+            return out
+        }
         speakers := ComPtr(p)
         ComCall(3, speakers, "uint*", &count := 0)                  ; GetCount
         loop count {
@@ -687,6 +719,11 @@ FindClaudeWindow() {
         ; all the screens when it uses the computer: that one's the biggest, but it has no buttons)
         if (WinGetTitle(hwnd) = "" || WinGetExStyle(hwnd) & 0x08000020)   ; WS_EX_NOACTIVATE | WS_EX_TRANSPARENT
             continue
+        ; (nor hidden ones, like Claude's window while it's closed to the tray, even in a script that
+        ; looks at hidden windows: picked, it never came up, and starting Claude, which brings it back,
+        ; was skipped. A minimized window still counts.)
+        if !DllCall("IsWindowVisible", "ptr", hwnd)
+            continue
         WinGetPos(, , &w, &h, hwnd)
         if (w * h > bestArea)
             best := hwnd, bestArea := w * h
@@ -716,8 +753,10 @@ OpenClaude() {
             DllCall("ShowWindow", "ptr", hwnd, "int", 4)   ; SW_SHOWNOACTIVATE: restored, but not in front
         Log("A full-screen window is in front (" WinGetProcessName(CameFrom) "), so Claude stays behind it")
     } else {
-        if (WinGetMinMax(hwnd) = -1)
+        if (WinGetMinMax(hwnd) = -1) {
             WinRestore hwnd
+            Sleep 100   ; (a moment to lay itself out again before its buttons are looked for and clicked)
+        }
         WinActivate hwnd
         if !WinWaitActive(hwnd, , 3)
             Log("Claude didn't come to the front within 3 seconds")
@@ -748,7 +787,11 @@ GiveBack() {
         try WinActivate(CameFrom)
 }
 
-OnChatPage(hwnd) {
+; (tab: the "Chat and Cowork" switch, if it was just found, so it isn't looked for again. Whether it's
+; picked is read from it as it is now; if it's gone since, it's looked for afresh.)
+OnChatPage(hwnd, tab := "") {
+    if tab
+        try return IsSelected(tab.el)
     tab := FindByPrefix(hwnd, UIA_RADIO, "Chat and Cowork")
     return tab && IsSelected(tab.el)
 }
@@ -854,13 +897,6 @@ HasFocus(el) {
     return focused != 0
 }
 
-ButtonNames(hwnd) {
-    names := Map()
-    for item in GetElements(hwnd, UIA_BUTTON)
-        names[item.name] := true
-    return names
-}
-
 GetPattern(el, patternId, iid) {
     ComCall(14, el, "int", patternId, "ptr", Guid(iid), "ptr*", &p := 0)   ; GetCurrentPatternAs
     return p ? ComPtr(p) : ""
@@ -952,9 +988,15 @@ HoldGameInFront(ms := 2000) {
     SetTimer(HoldFront, 25)
 }
 
+; Once the couple of seconds are up, Windows' foreground lock comes off again (see UiaPress). Left
+; on, in "Hey Claude", which keeps running, other programs could open behind instead of in front
+; until you pressed Alt or clicked. (Only a lock this script took comes off: Windows leaves one
+; another program took, like the captions' while you play.)
 HoldFront() {
-    if (A_TickCount > FrontUntil)
+    if (A_TickCount > FrontUntil) {
+        DllCall("LockSetForegroundWindow", "uint", 2)   ; LSFW_UNLOCK
         return SetTimer(HoldFront, 0)
+    }
     if (WinExist(CameFrom) && !WinActive(CameFrom) && WinActive("ahk_exe claude.exe"))
         try WinActivate(CameFrom)
 }

@@ -63,6 +63,8 @@ VOICE_CHAT_PAUSE_MS := 400      ; ...followed by a pause at least this long, the
 GOODBYE_QUIET_MS := 700   ; after a goodbye, end voice mode once Claude's voice has been quiet this long (ms)
 GOODBYE_MAX_MS  := 3000   ; ...but never later than this after the goodbye was caught, even if Claude is still talking
 VOICE_IDLE_MS   := 3000   ; end voice mode once it has just been "Listening" this long, with nobody talking (ms). 0 turns it off
+VOICE_START_MS  := 5000   ; ...and for this long after Claude's reply grows, for its voice to start (ms; see CheckVoiceIdle)
+VOICE_SAID_MS   := 8000   ; ...and for up to this long after the new ear last heard you, until what you said shows up in the chat (ms)
 ; "Hey Claude" has to beat these in a second check, so chants like "Oh yeah, let's go!" don't set
 ; it off. None of them share a word with "Hey Claude", which would let the recognizer split it in two.
 LOOK_ALIKES := ["oh yeah", "yeah", "let's go", "okay", "alright", "come on", "what's up", "oh no", "no way",
@@ -82,6 +84,9 @@ SAMPLES_DIR     := A_ScriptDir "\hey-claude-voice-samples"     ; your recordings
 HeyLogLines := []
 Listener := ""
 EarPid := 0                                 ; the new ear, while it's running (see StartEar)
+EarStartedAt := 0                           ; ...when it was last started, and last seen running (see CheckEar)
+EarSeenAt := 0
+EarQuickStops := 0                          ; ...and how many times in a row it has stopped within a minute of starting
 Paused := false
 Busy := false
 LastDone := 0
@@ -159,13 +164,20 @@ StopConversation(*) {
     }
 }
 
-; The window of another copy of this script that's already running, if there is one.
+; The window of another copy of this script that's already running, if there is one. (Its window is
+; hidden, so hidden windows are looked at, for this look only: set at startup and left on, every
+; part of the script looked at them from then on, and a hidden window of Claude's could be picked.)
 OtherListener() {
+    hiddenBefore := A_DetectHiddenWindows
     DetectHiddenWindows true
+    running := 0
     for hwnd in WinGetList(A_ScriptFullPath " ahk_class AutoHotkey")
-        if (hwnd != A_ScriptHwnd)
-            return hwnd
-    return 0
+        if (hwnd != A_ScriptHwnd) {
+            running := hwnd
+            break
+        }
+    DetectHiddenWindows hiddenBefore
+    return running
 }
 
 ; ---- The new ear ------------------------------------------------------------------
@@ -173,28 +185,64 @@ OtherListener() {
 ; Whether to listen with the new ear: it's switched on, and it's there (its own Python, in its folder).
 UseNewEar() => USE_NEW_EAR && FileExist(EAR_DIR "\venv\Scripts\pythonw.exe") && FileExist(EAR_DIR "\hey_claude_ear.py")
 
-; Starts the new ear, which exits by itself when this script does.
-StartEar() {
-    global EarPid
+; Starts the new ear, which exits by itself when this script does. (checkMs: how soon to check it's
+; still running, see CheckEar.)
+StartEar(checkMs := 5000) {
+    global EarPid, EarStartedAt, EarSeenAt
+    ; (noted first, so if it can't even be started, that counts as stopping straight away)
+    EarStartedAt := EarSeenAt := A_TickCount
+    SetTimer(CheckEar, checkMs)
     Run(Format('"{1}\venv\Scripts\pythonw.exe" "{1}\hey_claude_ear.py" --parent {2}', EAR_DIR, DllCall("GetCurrentProcessId")), EAR_DIR, "Hide", &pid)
     EarPid := pid
-    SetTimer(CheckEar, 5000)
+}
+
+; Whether the new ear (its process number, pid) is still running: that number, and still Python's.
+; (Once the ear's gone, Windows can give its number to any other program: closing it by that number,
+; as StopEar does, would have closed that program for good, a game even, with everything it started.)
+EarProcess(pid) {
+    try return pid && ProcessExist(pid) && ProcessGetName(pid) ~= "i)^pythonw?\.exe$"
+    return false
 }
 
 StopEar() {
-    global EarPid
+    global EarPid, EarQuickStops
     SetTimer(CheckEar, 0)
-    if EarPid   ; (with the Python it starts)
+    if EarProcess(EarPid)   ; (with the Python it starts)
         try RunWait("taskkill /T /F /PID " EarPid, , "Hide")
-    EarPid := 0
+    EarPid := 0, EarQuickStops := 0   ; (started again from the tray menu, it gets a fresh set of tries)
 }
 
-; Starts the new ear again if it stopped.
+; Starts the new ear again if it stopped. If it keeps stopping soon after it starts (like after an
+; update broke its Python, which says why only in hey-claude-ear\ear-log.txt, if at all), it waits
+; twice as long each time before it checks again, and after 5 such stops in a row it gives up and
+; says so, here and on the tray icon, instead of starting it every 5 seconds for good (each start is
+; seconds of the PC's time, while you might be playing).
 CheckEar() {
-    if (EarPid && !Paused && !ProcessExist(EarPid)) {
-        HeyLog("The new ear stopped; starting it again")
-        StartEar()
+    global EarSeenAt, EarQuickStops
+    if (!EarPid || Paused)
+        return
+    if EarProcess(EarPid) {   ; (not just its number: given to another program meanwhile, that isn't the ear)
+        EarSeenAt := A_TickCount
+        if (EarQuickStops && EarSeenAt - EarStartedAt > 60000)   ; (it's kept running this time: back to checking every 5 seconds)
+            EarQuickStops := 0, SetTimer(CheckEar, 5000)
+        return
     }
+    ; (stopped within a minute of starting, going by when it was last seen running: a stop can be
+    ; noticed long after it happened, once the checks are far apart)
+    EarQuickStops := EarSeenAt - EarStartedAt < 60000 ? EarQuickStops + 1 : 0
+    if (EarQuickStops >= 5) {
+        SetTimer(CheckEar, 0)
+        A_IconTip := '"Hey Claude" isn`'t listening: its ear keeps stopping (see claude-hey-claude-log.txt)'
+        HeyLog("The new ear stopped right after starting " EarQuickStops " times in a row, so it isn't being started again and 'Hey Claude' isn't listening."
+            . " Its own notes may say why (hey-claude-ear\ear-log.txt). To try again, pause and resume listening from the tray icon, or start this script again")
+        return
+    }
+    checkMs := 5000 << EarQuickStops   ; (5 seconds, then 10, 20, 40 and 80 after stops in a row)
+    HeyLog("The new ear stopped" (EarQuickStops ? " (" EarQuickStops " in a row soon after starting)" : "") "; starting it again"
+        . (EarQuickStops ? ", and checking on it in " checkMs // 1000 " s" : ""))
+    try StartEar(checkMs)
+    catch as err   ; (noted here rather than popping up over a game; tried again at the next check)
+        HeyLog("Couldn't start the new ear: " err.Message)
 }
 
 ; The new ear heard "Hey Claude" on its own: wParam is how long it was (ms), lParam the "hey claude"
@@ -528,11 +576,13 @@ VoiceWatch() {
     global VoiceListening, LastSaid, Candidate
     if (Busy || Paused || Teaching || !(Listener || EarPid))
         return
-    ; Voice mode is on when its microphone button shows, however voice mode was started.
+    ; Voice mode is on when its microphone button shows, however voice mode was started. (That's
+    ; looked for first, and which page is showing only once it's there: each is a look over Claude's
+    ; whole window, and this runs every second, all day, mostly with voice mode off.)
     on := false, hwnd := 0
     try {
         hwnd := FindClaudeWindow()
-        on := (hwnd && OnChatPage(hwnd) && FindButton(hwnd, IsVoiceModeControl)) ? true : false
+        on := (hwnd && FindButton(hwnd, IsVoiceModeControl) && OnChatPage(hwnd)) ? true : false
     }
     if (on != VoiceListening) {
         VoiceListening := on
@@ -572,7 +622,7 @@ VoiceWatch() {
     }
     said := msgs.said
     if (s && said != LastSaid)
-        s.lastYou := A_TickCount
+        s.lastYou := s.saidAt := A_TickCount
     ; Judge a new message only once it has stayed the same for a second, in case Claude is still
     ; writing it down (so "I'll see you in the code" isn't cut off at "I'll see you").
     if (said != LastSaid && said = Candidate) {
@@ -596,9 +646,10 @@ StartVoiceSession() {
     ; and Claude hasn't started replying, since awaitingSince; busyUntil: about when Claude will have
     ; read its reply out; replyAt: when its reply last grew; claudeSoundAt: when Claude was last heard,
     ; and claudeLevel how loud lately, for the log, as notedAt is when it last noted why it stays on;
-    ; mic and levels: your mic without the new ear; claude: Claude's sound meters, found at claudeAt)
-    VoiceSession := {lastYou: A_TickCount + 4000, awaitingReply: false, awaitingSince: 0, busyUntil: 0, lastReply: "", replyAt: 0,
-        claudeSoundAt: 0, claudeLevel: 0.0, notedAt: 0, mic: "", levels: [], claude: [], claudeAt: 0}
+    ; mic and levels: your mic without the new ear; earAt: when the new ear last heard you; saidAt:
+    ; when a new "You said" last showed up. Claude's sound meters are kept by ClaudeSoundNow.)
+    VoiceSession := {lastYou: A_TickCount + 4000, earAt: 0, saidAt: 0, awaitingReply: false, awaitingSince: 0, busyUntil: 0, lastReply: "", replyAt: 0,
+        claudeSoundAt: 0, claudeLevel: 0.0, notedAt: 0, mic: "", levels: []}
     if !EarPid   ; (the new ear says when you're talking instead: see EarTalking)
         try VoiceSession.mic := OpenMicMeter()
     try VoiceSession.lastReply := NewestMessages(FindClaudeWindow()).reply
@@ -609,7 +660,7 @@ StartVoiceSession() {
 ; itself, not just sound, so a noisy room (a game, a fan) doesn't keep voice mode on forever.
 EarTalking(*) {
     if (s := VoiceSession)
-        s.lastYou := A_TickCount
+        s.lastYou := s.earAt := A_TickCount
     return 0
 }
 
@@ -624,19 +675,11 @@ VoiceSoundWatch() {
     if !s
         return
     now := A_TickCount
-    if (now - s.claudeAt > 2000) {   ; Claude's sound streams come and go; look again every 2 seconds
-        try s.claude := ClaudeSoundMeters()
-        s.claudeAt := now
-    }
-    loudest := 0.0
-    for meter in s.claude {
-        try {
-            ComCall(3, meter, "float*", &peak := 0)   ; GetPeakValue
-            loudest := Max(loudest, peak)
-            if (peak > 0.01)
-                s.claudeSoundAt := now, s.awaitingReply := false
-        }
-    }
+    ; (Claude's sound streams come and go: they're looked for again after 2 seconds without a sound
+    ; from Claude, or once one can't be read, see ClaudeSoundNow)
+    loudest := ClaudeSoundNow(2000)
+    if (loudest > 0.01)
+        s.claudeSoundAt := now, s.awaitingReply := false
     s.claudeLevel := Max(s.claudeLevel * 0.9, loudest)   ; (for the log)
     if s.mic {   ; (only without the new ear)
         try {
@@ -672,13 +715,24 @@ CheckVoiceIdle() {
     ; (Claude heard lately: while its reply should still be going, or for up to 30 s after you last
     ; talked, in case its reply can't be read at all)
     speaking := now - s.claudeSoundAt < VOICE_IDLE_MS && (now < s.busyUntil + 8000 || now - s.lastYou < 30000)
-    reading := now < s.busyUntil && s.claudeSoundAt < s.replyAt   ; (Claude's sound can't be heard at all: the guess instead)
-    if (quiet < VOICE_IDLE_MS || waiting || speaking || reading) {
+    ; (The ear heard you after your newest "You said" showed up, and after Claude was last heard: what
+    ; you said may not be in the chat yet. Claude takes a few seconds after you stop to write it down,
+    ; more for a long message, and until then nothing else says you're waiting for its reply.)
+    transcribing := s.earAt > Max(s.saidAt, s.claudeSoundAt) && now - s.earAt < VOICE_SAID_MS
+    ; (Claude not heard since its reply last grew: the guess instead, while its reply would take to
+    ; say, if Claude's sound can't be heard at all. Once it has been heard in this voice mode, for
+    ; VOICE_START_MS after its reply grows instead, however few words show, for its voice to start: at
+    ; the end of a reply read out, Claude's window often fills in the whole reply as written, and the
+    ; guess kept voice mode on for all of it, over a minute, with Claude done.)
+    reading := s.claudeSoundAt < s.replyAt && (s.claudeSoundAt ? now - s.replyAt < VOICE_START_MS : now < s.busyUntil)
+    if (quiet < VOICE_IDLE_MS || waiting || speaking || transcribing || reading) {
         ; (noted every 10 s while you're quiet and it stays on, so the log says why)
         if (quiet >= VOICE_IDLE_MS && now - s.notedAt > 10000) {
             s.notedAt := now
             HeyLog(Format("Quiet for {} s, but voice mode stays on while {} (Claude's sound level {:.3f})", quiet // 1000,
-                waiting ? "Claude gets its reply started" : speaking ? "Claude is talking" : Format("Claude reads its reply out (about {} s more)", (s.busyUntil - now) // 1000),
+                waiting ? "Claude gets its reply started" : speaking ? "Claude is talking" : transcribing ? "Claude writes down what you said"
+                    : s.claudeSoundAt ? "Claude's voice starts on its reply"
+                    : Format("Claude reads its reply out (about {} s more)", (s.busyUntil - now) // 1000),
                 s.claudeLevel))
         }
         return
@@ -710,7 +764,7 @@ OnYouSaid(said) {
 
 StartGoodbye(message) {
     global PendingGoodbye
-    PendingGoodbye := {message: message, since: A_TickCount, heardClaude: false, lastSound: 0, meters: [], metersAt: 0}
+    PendingGoodbye := {message: message, since: A_TickCount, heardClaude: false, lastSound: 0}
     SetTimer(GoodbyeWatch, 100)
 }
 
@@ -728,17 +782,9 @@ GoodbyeWatch() {
     if !g
         return CancelGoodbye()
     now := A_TickCount
-    if (now - g.metersAt > 1000) {   ; Claude's sound streams come and go; look again every second
-        try g.meters := ClaudeSoundMeters()
-        g.metersAt := now
-    }
-    level := 0.0
-    for meter in g.meters {
-        try {
-            ComCall(3, meter, "float*", &peak := 0)   ; GetPeakValue
-            level := Max(level, peak)
-        }
-    }
+    ; (the same sound meters VoiceSoundWatch reads, rather than a list of its own: here they're looked
+    ; for again after a second without a sound from Claude, as Claude starts its reply)
+    level := ClaudeSoundNow(1000)
     if (level > 0.01)
         g.heardClaude := true, g.lastSound := now
     finished := g.heardClaude && now - g.lastSound >= GOODBYE_QUIET_MS

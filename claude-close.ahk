@@ -13,7 +13,11 @@
 CLAUDE_APP := "shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude"   ; how Windows starts the Claude app
 
 ; UI Automation lets the script find Claude's menu items by their names instead of by screen position.
-UIA := ComObject("{ff48dba4-60ef-4201-aa87-54103eef594e}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+; If Claude's window stops answering for a moment, each request gives up after 4 seconds instead of
+; Windows' usual 20, so the button can't hang that long (as in claude-voice-on-off-send.ahk). Then
+; it goes on to the usual question about forcing Claude closed.
+UIA := ComObject("{e22ad333-b25f-460c-83d0-0581107395c9}", "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")   ; CUIAutomation8
+try ComCall(63, ComObjQuery(UIA, "{34723aff-0c9d-49d0-9896-7ab52df8cd8a}"), "uint", 4000)   ; IUIAutomation2 TransactionTimeout
 UIA_BUTTON := 50000, UIA_MENUITEM := 50011
 
 if (A_LineFile = A_ScriptFullPath)
